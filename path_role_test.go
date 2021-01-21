@@ -3,21 +3,21 @@ package exoscale
 import (
 	"context"
 	"fmt"
-	"time"
+	"strings"
 
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
 var (
-	testRoleName                 = "read-only"
-	testRoleTokenPolicies        = []string{"read-only"}
-	testRoleAllowedInstancePools = []string{testInstancePoolID}
-	testRoleMaxClientInstanceAge = 10 * time.Minute
-	testRole                     = backendRole{
-		AllowedInstancePools:         testRoleAllowedInstancePools,
-		MatchClientInstanceIPAddress: true,
-		MaxClientInstanceAge:         testRoleMaxClientInstanceAge,
-	}
+	testRoleName          = "read-only"
+	testRoleTokenPolicies = []string{"read-only"}
+	testRoleValidator     = fmt.Sprintf(
+		"zone == \"%s\" && client_ip == public_ip && manager_id == \"%s\" && created > now - duration(\"10m\")",
+		testZoneName,
+		testInstancePoolID)
+	testBadRoleValidator = "zone"
+	testBadRole          = backendRole{Validator: testBadRoleValidator}
+	testRole             = backendRole{Validator: testRoleValidator}
 )
 
 func (ts *backendTestSuite) TestPathRoleWrite() {
@@ -28,9 +28,7 @@ func (ts *backendTestSuite) TestPathRoleWrite() {
 		Operation: logical.CreateOperation,
 		Path:      roleStoragePathPrefix + testRoleName,
 		Data: map[string]interface{}{
-			roleKeyAllowedInstancePools:         testRoleAllowedInstancePools,
-			roleKeyMatchClientInstanceIPAddress: true,
-			roleKeyMaxClientInstanceAge:         testRoleMaxClientInstanceAge,
+			roleKeyValidator: testRoleValidator,
 		},
 	})
 	if err != nil {
@@ -41,6 +39,19 @@ func (ts *backendTestSuite) TestPathRoleWrite() {
 	ts.Require().NoError(err)
 	ts.Require().NoError(entry.DecodeJSON(&actualRoleConfig))
 	ts.Require().Equal(testRole, actualRoleConfig)
+}
+
+func (ts *backendTestSuite) TestPathRoleWriteBadValidator() {
+	_, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
+		Storage:   ts.storage,
+		Operation: logical.CreateOperation,
+		Path:      roleStoragePathPrefix + testRoleName,
+		Data: map[string]interface{}{
+			roleKeyValidator: testBadRoleValidator,
+		},
+	})
+	ts.Require().Error(err, "request should have failed")
+	ts.Require().True(strings.Contains(err.Error(), "bad expression: result type should be boolean"))
 }
 
 func (ts *backendTestSuite) TestPathRoleRead() {
@@ -55,9 +66,7 @@ func (ts *backendTestSuite) TestPathRoleRead() {
 		ts.FailNow("request failed", err)
 	}
 
-	ts.Require().Equal(fmt.Sprint(testRoleAllowedInstancePools), res.Data[roleKeyAllowedInstancePools].(string))
-	ts.Require().Equal(true, res.Data[roleKeyMatchClientInstanceIPAddress].(bool))
-	ts.Require().Equal(fmt.Sprint(testRoleMaxClientInstanceAge), res.Data[roleKeyMaxClientInstanceAge].(string))
+	ts.Require().Equal(testRoleValidator, res.Data[roleKeyValidator].(string))
 }
 
 func (ts *backendTestSuite) TestPathRoleList() {

@@ -72,7 +72,33 @@ func (ts *backendTestSuite) TestPathLogin_DenyClientNotInstancePoolMember() {
 		},
 	})
 	ts.Require().Error(err, "request should have failed")
-	ts.Require().True(strings.Contains(err.Error(), "permission denied"))
+	ts.Require().True(strings.Contains(err.Error(), "failed validation"))
+}
+
+func (ts *backendTestSuite) TestPathLogin_DenyNonBooleanExpressions() {
+	ts.storeEntry(roleStoragePathPrefix+testRoleName, testBadRole)
+	ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{{
+		Name:      testInstanceName,
+		ID:        egoscale.MustParseUUID(testInstanceID),
+		ZoneName:  testZoneName,
+		ZoneID:    egoscale.MustParseUUID(testZoneID),
+		ManagerID: nil,
+		Nic:       []egoscale.Nic{{IPAddress: testInstanceIPAddress, IsDefault: true}},
+	}})
+
+	_, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
+		Storage:    ts.storage,
+		Operation:  logical.UpdateOperation,
+		Path:       "login",
+		Connection: &logical.Connection{RemoteAddr: testInstanceIPAddress.String()},
+		Data: map[string]interface{}{
+			"instance": testInstanceID,
+			"role":     testRoleName,
+			"zone":     testZoneName,
+		},
+	})
+	ts.Require().Error(err, "request should have failed")
+	ts.Require().True(strings.Contains(err.Error(), "bad expression: result type should be boolean"))
 }
 
 func (ts *backendTestSuite) TestPathLogin_DenyClientWrongInstancePool() {
@@ -98,7 +124,7 @@ func (ts *backendTestSuite) TestPathLogin_DenyClientWrongInstancePool() {
 		},
 	})
 	ts.Require().Error(err, "request should have failed")
-	ts.Require().True(strings.Contains(err.Error(), "permission denied"))
+	ts.Require().True(strings.Contains(err.Error(), "failed validation"))
 }
 
 func (ts *backendTestSuite) TestPathLogin_DenyClientInstanceTooOld() {
@@ -125,7 +151,7 @@ func (ts *backendTestSuite) TestPathLogin_DenyClientInstanceTooOld() {
 		},
 	})
 	ts.Require().Error(err, "request should have failed")
-	ts.Require().True(strings.Contains(err.Error(), "permission denied"))
+	ts.Require().True(strings.Contains(err.Error(), "failed validation"))
 }
 
 func (ts *backendTestSuite) TestPathLogin_DenyClientWrongIPAddress() {
@@ -152,7 +178,7 @@ func (ts *backendTestSuite) TestPathLogin_DenyClientWrongIPAddress() {
 		},
 	})
 	ts.Require().Error(err, "request should have failed")
-	ts.Require().True(strings.Contains(err.Error(), "permission denied"))
+	ts.Require().True(strings.Contains(err.Error(), "failed validation"))
 }
 
 func (ts *backendTestSuite) TestPathLogin_Successful() {
