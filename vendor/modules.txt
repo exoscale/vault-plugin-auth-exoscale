@@ -1,3 +1,5 @@
+# github.com/antlr/antlr4 v0.0.0-20200503195918-621b933c7a7f
+github.com/antlr/antlr4/runtime/Go/antlr
 # github.com/armon/go-radix v1.0.0
 ## explicit
 github.com/armon/go-radix
@@ -32,6 +34,24 @@ github.com/golang/protobuf/ptypes/timestamp
 # github.com/golang/snappy v0.0.2
 ## explicit
 github.com/golang/snappy
+# github.com/google/cel-go v0.7.0
+## explicit
+github.com/google/cel-go/cel
+github.com/google/cel-go/checker
+github.com/google/cel-go/checker/decls
+github.com/google/cel-go/common
+github.com/google/cel-go/common/containers
+github.com/google/cel-go/common/debug
+github.com/google/cel-go/common/operators
+github.com/google/cel-go/common/overloads
+github.com/google/cel-go/common/types
+github.com/google/cel-go/common/types/pb
+github.com/google/cel-go/common/types/ref
+github.com/google/cel-go/common/types/traits
+github.com/google/cel-go/interpreter
+github.com/google/cel-go/interpreter/functions
+github.com/google/cel-go/parser
+github.com/google/cel-go/parser/gen
 # github.com/hashicorp/errwrap v1.1.0
 ## explicit
 github.com/hashicorp/errwrap
@@ -140,6 +160,8 @@ github.com/pkg/errors
 github.com/pmezard/go-difflib/difflib
 # github.com/ryanuber/go-glob v1.0.0
 github.com/ryanuber/go-glob
+# github.com/stoewer/go-strcase v1.2.0
+github.com/stoewer/go-strcase
 # github.com/stretchr/objx v0.3.0
 ## explicit
 github.com/stretchr/objx
@@ -177,10 +199,12 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
+golang.org/x/text/width
 # golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
 golang.org/x/time/rate
 # google.golang.org/genproto v0.0.0-20210113195801-ae06605f4595
 ## explicit
+google.golang.org/genproto/googleapis/api/expr/v1alpha1
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.35.0
 ## explicit
@@ -233,12 +257,14 @@ google.golang.org/grpc/stats
 google.golang.org/grpc/status
 google.golang.org/grpc/tap
 # google.golang.org/protobuf v1.25.0
+google.golang.org/protobuf/encoding/protojson
 google.golang.org/protobuf/encoding/prototext
 google.golang.org/protobuf/encoding/protowire
 google.golang.org/protobuf/internal/descfmt
 google.golang.org/protobuf/internal/descopts
 google.golang.org/protobuf/internal/detrand
 google.golang.org/protobuf/internal/encoding/defval
+google.golang.org/protobuf/internal/encoding/json
 google.golang.org/protobuf/internal/encoding/messageset
 google.golang.org/protobuf/internal/encoding/tag
 google.golang.org/protobuf/internal/encoding/text
@@ -255,15 +281,19 @@ google.golang.org/protobuf/internal/set
 google.golang.org/protobuf/internal/strs
 google.golang.org/protobuf/internal/version
 google.golang.org/protobuf/proto
+google.golang.org/protobuf/reflect/protodesc
 google.golang.org/protobuf/reflect/protoreflect
 google.golang.org/protobuf/reflect/protoregistry
 google.golang.org/protobuf/runtime/protoiface
 google.golang.org/protobuf/runtime/protoimpl
 google.golang.org/protobuf/types/descriptorpb
+google.golang.org/protobuf/types/dynamicpb
 google.golang.org/protobuf/types/known/anypb
 google.golang.org/protobuf/types/known/durationpb
 google.golang.org/protobuf/types/known/emptypb
+google.golang.org/protobuf/types/known/structpb
 google.golang.org/protobuf/types/known/timestamppb
+google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/square/go-jose.v2 v2.3.1
 gopkg.in/square/go-jose.v2
 gopkg.in/square/go-jose.v2/cipher

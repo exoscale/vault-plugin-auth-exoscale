@@ -74,19 +74,18 @@ $ vault write auth/exoscale/config \
 
 Backend roles are used to determine how Vault clients running on Exoscale Compute instances must be authenticated by the exoscale auth method.
 
-When creating a role, the following checks (disabled by default) can be performed:
+When creating a role, a validation expression must be supplied. Validation expression [CEL][cel] language is used to perform checks, allowing for a wide variety of checks against the Compute instance presenting itself as Vault client.
 
-* The specified Compute instance must be member of a specific [Instance Pool][exo-doc-instance-pools].
-* The client (requester) IP address must match the specified Compute instance's IP address.
-* The specified Compute instance must not have been created too long ago.
 
 ```sh
 $ vault write auth/exoscale/role/ci-worker \
     token_policies=ci-worker \
-    allowed_instance_pools=6d540f20-ac97-dd6a-5d67-cc11a5e224a5
+    validator='client_ip == instance_public_ip && instance_created > now - duration("10m")'
 ```
 
-Besides additional checks configuration, roles can also be used to set the properties of the Vault [tokens][vault-doc-tokens] to be issued upon successful authentication: run the `vault path-help auth/exoscale/role/create` for more information.
+In the above, we enforce that a Compute instance presenting itself has been created within the last 10 minutes and is coming from the same IP address than the one it was assigned on its public interface. To know which variables are available to the context in which the expression will be evaluated, run the `vault path-help auth/exoscale/role/_` command.
+
+Besides additional checks configuration, roles can also be used to set the properties of the Vault [tokens][vault-doc-tokens] to be issued upon successful authentication: run the `vault path-help auth/exoscale/role/_` command for more information.
 
 
 ### Log into Vault using the Exoscale auth method
@@ -115,6 +114,7 @@ policies             ["ci-worker" "default"]
 The complete backend plugin usage documentation is available through the command `vault path-help auth/exoscale`.
 
 
+[cel]: https://opensource.google/projects/cel
 [exo-doc-instance-pools]: https://community.exoscale.com/documentation/compute/instance-pools/
 [gh-releases]: https://github.com/exoscale/vault-plugin-auth-exoscale/releases
 [vault-doc-intro]: https://www.vaultproject.io/intro/getting-started/install.html

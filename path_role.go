@@ -3,9 +3,13 @@ package exoscale
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/exoscale/egoscale"
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/checker/decls"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/tokenutil"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -15,90 +19,146 @@ import (
 const (
 	roleStoragePathPrefix = "role/"
 
-	roleKeyName                         = "name"
-	roleKeyAllowedInstancePools         = "allowed_instance_pools"
-	roleKeyMatchClientInstanceIPAddress = "match_client_instance_ip_address"
-	roleKeyMaxClientInstanceAge         = "max_client_instance_age"
+	roleKeyName      = "name"
+	roleKeyValidator = "validator"
+
+	roleValidatorVarClientIP                   = "client_ip"
+	roleValidatorVarInstanceCreated            = "instance_created"
+	roleValidatorVarInstanceID                 = "instance_id"
+	roleValidatorVarInstanceManager            = "instance_manager"
+	roleValidatorVarInstanceManagerID          = "instance_manager_id"
+	roleValidatorVarInstanceName               = "instance_name"
+	roleValidatorVarInstancePublicIP           = "instance_public_ip"
+	roleValidatorVarInstanceSecurityGroupIDs   = "instance_security_group_ids"
+	roleValidatorVarInstanceSecurityGroupNames = "instance_security_group_names"
+	roleValidatorVarInstanceTags               = "instance_tags"
+	roleValidatorVarInstanceZoneID             = "instance_zone_id"
+	roleValidatorVarInstanceZoneName           = "instance_zone_name"
+	roleValidatorVarNow                        = "now"
+
+	defaultRoleValidator = roleValidatorVarClientIP + " == " + roleValidatorVarInstancePublicIP
 )
 
 var (
+	roleValidatorsVars = map[string]string{
+		roleValidatorVarClientIP:                   "IP address of the Vault client (string)",
+		roleValidatorVarInstanceCreated:            "creation date of the instance (timestamp)",
+		roleValidatorVarInstanceID:                 "ID of the instance (string)",
+		roleValidatorVarInstanceManager:            "type of the instance manager, if any (string)",
+		roleValidatorVarInstanceManagerID:          "ID of the instance manager, if any (string)",
+		roleValidatorVarInstanceName:               "name of the instance (string)",
+		roleValidatorVarInstancePublicIP:           "public IPv4 address of the instance (string)",
+		roleValidatorVarInstanceSecurityGroupIDs:   "list of Security Group IDs the instance belongs to (list of strings)",
+		roleValidatorVarInstanceSecurityGroupNames: "list of Security Group names the instance belongs to (list of strings)",
+		roleValidatorVarInstanceTags:               "map of instance tags (map[string]string)",
+		roleValidatorVarInstanceZoneID:             "ID of the instance's zone (string)",
+		roleValidatorVarInstanceZoneName:           "name of the instance's zone (string)",
+		roleValidatorVarNow:                        "current timestamp (timestamp)",
+	}
+
 	pathListRolesHelpSyn  = "List the configured backend roles"
 	pathListRolesHelpDesc = `
-This endpoint returns a list of the configured backend roles.
+This endpoint returns a list of configured backend roles.
 `
 
 	pathRoleHelpSyn  = "Manage backend roles"
-	pathRoleHelpDesc = `
+	pathRoleHelpDesc = fmt.Sprintf(`
 This endpoint manages backend roles, which are used to determine how Vault
 clients running on Exoscale Compute instances must be authenticated by the
 exoscale auth method.
 
-When creating a role, the following checks (disabled by default) can be
-performed:
+When creating a role, the validator CEL[0] expression can contain the following
+variables:
 
-  * The specified Compute instance must be member of a specific Instance Pool.
-  * The client (requester) IP address must match the specified Compute
-    instance's IP address.
-  * The specified Compute instance must not have been created too long ago.
-`
+%s
+
+If no validation expression is provided during the creation of a role, the
+following expression is set by default:
+
+  %s
+
+[0]: https://github.com/google/cel-spec
+`, func() string {
+		var (
+			vars = make([]string, 0)
+			out  strings.Builder
+		)
+
+		for k := range roleValidatorsVars {
+			vars = append(vars, k)
+		}
+		sort.Strings(vars)
+		for _, v := range vars {
+			_, _ = fmt.Fprintf(&out, "  * %s: %s\n", v, roleValidatorsVars[v])
+		}
+
+		return out.String()
+	}(),
+		defaultRoleValidator,
+	)
 )
 
 type backendRole struct {
-	AllowedInstancePools         []string      `json:"allowed_instance_pools"`
-	MaxClientInstanceAge         time.Duration `json:"max_client_instance_age"`
-	MatchClientInstanceIPAddress bool          `json:"match_client_instance_ip_address"`
+	Validator string `json:"validator"`
 
 	tokenutil.TokenParams
 }
 
 func (r *backendRole) checkInstance(req *logical.Request, instance *egoscale.VirtualMachine) error {
-	// Check Instance <> Instance Pool relationship
-	if r.AllowedInstancePools != nil {
-		var isMember bool
-		for _, instancePoolID := range r.AllowedInstancePools {
-			if instance.ManagerID == nil {
-				break
-			}
+	p, err := buildCELProgram(r.Validator)
+	if err != nil {
+		return err
+	}
 
-			if instance.ManagerID.String() == instancePoolID {
-				isMember = true
-				break
-			}
-		}
-		if !isMember {
-			return fmt.Errorf("%w: instance %s is not member of any Instance Pools allowed by role",
-				errAuthFailed,
-				instance.ID)
+	tags := make(map[string]string)
+	for _, t := range instance.Tags {
+		tags[t.Key] = t.Value
+	}
+
+	created, _ := time.Parse("2006-01-02T15:04:05-0700", instance.Created)
+	var ipaddress string
+	for _, n := range instance.Nic {
+		if n.IsDefault {
+			ipaddress = n.IPAddress.String()
+			break
 		}
 	}
 
-	// Check client Instance age limit
-	if r.MaxClientInstanceAge > 0 {
-		instanceCreationTime, err := time.Parse("2006-01-02T15:04:05-0700", instance.Created)
-		if err != nil {
-			return fmt.Errorf("%w: unable to parse Compute instance creation timestamp: %s",
-				errInternalError,
-				err) // nolint:errorlint
-		}
-
-		instanceLifetime := time.Now().Sub(instanceCreationTime)
-		if instanceLifetime > r.MaxClientInstanceAge {
-			return fmt.Errorf("%w: instance %s is older than maximum allowed age (%s > %s)",
-				errAuthFailed,
-				instance.ID,
-				instanceLifetime,
-				r.MaxClientInstanceAge)
-		}
+	sgNames := make([]string, 0)
+	sgIDs := make([]string, 0)
+	for _, sg := range instance.SecurityGroup {
+		sgNames = append(sgNames, sg.Name)
+		sgIDs = append(sgIDs, sg.ID.String())
 	}
 
-	// Check client IP address matches client Instance IP address
-	if r.MatchClientInstanceIPAddress {
-		if req.Connection.RemoteAddr != instance.DefaultNic().IPAddress.String() {
-			return fmt.Errorf("%w: client IP address does not match instance IP address (%s != %s)",
-				errAuthFailed,
-				req.Connection.RemoteAddr,
-				instance.DefaultNic().IPAddress.String())
-		}
+	var managerID string
+	if instance.ManagerID != nil {
+		managerID = instance.ManagerID.String()
+	}
+
+	evalContext := map[string]interface{}{
+		roleValidatorVarClientIP:                   req.Connection.RemoteAddr,
+		roleValidatorVarInstanceCreated:            created,
+		roleValidatorVarInstanceID:                 instance.ID.String(),
+		roleValidatorVarInstanceManager:            instance.Manager,
+		roleValidatorVarInstanceManagerID:          managerID,
+		roleValidatorVarInstanceName:               instance.Name,
+		roleValidatorVarInstancePublicIP:           ipaddress,
+		roleValidatorVarInstanceSecurityGroupIDs:   sgIDs,
+		roleValidatorVarInstanceSecurityGroupNames: sgNames,
+		roleValidatorVarInstanceTags:               tags,
+		roleValidatorVarInstanceZoneID:             instance.ZoneID.String(),
+		roleValidatorVarInstanceZoneName:           instance.ZoneName,
+		roleValidatorVarNow:                        time.Now(),
+	}
+
+	result, _, err := p.Eval(evalContext)
+	if err != nil {
+		return err
+	}
+
+	if success := result.Value().(bool); !success {
+		return fmt.Errorf("%w: role validation failed", errAuthFailed)
 	}
 
 	return nil
@@ -126,20 +186,11 @@ func pathRole(b *exoscaleBackend) *framework.Path {
 				Description: "Name of the role",
 				Required:    true,
 			},
-			roleKeyAllowedInstancePools: {
-				Type: framework.TypeStringSlice,
-				Description: "List of Instance Pools (ID) the client Compute " +
-					"instance must be member of during authentication",
-			},
-			roleKeyMatchClientInstanceIPAddress: {
-				Type: framework.TypeBool,
-				Description: "Match clients remote IP address against advertised " +
-					"Compute instance's during authentication (disabled by default)",
-			},
-			roleKeyMaxClientInstanceAge: {
-				Type: framework.TypeDurationSecond,
-				Description: "Maximum client Compute instance age to allow during " +
-					"authentication (0 = disabled)",
+			roleKeyValidator: {
+				Type:        framework.TypeString,
+				Description: "Validation expression in CEL",
+				Default:     defaultRoleValidator,
+				Required:    true,
 			},
 		},
 
@@ -200,9 +251,7 @@ func (b *exoscaleBackend) readRole(ctx context.Context, req *logical.Request,
 	}
 
 	d := map[string]interface{}{
-		roleKeyAllowedInstancePools:         fmt.Sprint(role.AllowedInstancePools),
-		roleKeyMatchClientInstanceIPAddress: role.MatchClientInstanceIPAddress,
-		roleKeyMaxClientInstanceAge:         fmt.Sprint(role.MaxClientInstanceAge),
+		roleKeyValidator: role.Validator,
 	}
 
 	role.PopulateTokenData(d)
@@ -222,15 +271,17 @@ func (b *exoscaleBackend) writeRole(ctx context.Context, req *logical.Request,
 		role = &backendRole{}
 	}
 
-	if v, ok := data.GetOk(roleKeyAllowedInstancePools); ok {
-		role.AllowedInstancePools = v.([]string)
+	role.Validator = data.Get(roleKeyValidator).(string)
+	if _, err = buildCELProgram(role.Validator); err != nil {
+		if errors.Is(err, errInvalidFieldValue) {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+		return nil, err
 	}
-	if v, ok := data.GetOk(roleKeyMatchClientInstanceIPAddress); ok {
-		role.MatchClientInstanceIPAddress = v.(bool)
-	}
-	if v, ok := data.GetOk(roleKeyMaxClientInstanceAge); ok {
-		role.MaxClientInstanceAge = time.Second * time.Duration(v.(int))
-	}
+
+	b.Logger().Debug(fmt.Sprintf("creating role %q", name),
+		"validator", role.Validator,
+	)
 
 	if err := role.ParseTokenFields(req, data); err != nil {
 		return nil, err
@@ -256,4 +307,44 @@ func (b *exoscaleBackend) deleteRole(ctx context.Context, req *logical.Request,
 	}
 
 	return nil, nil
+}
+
+func buildCELProgram(expression string) (cel.Program, error) {
+	env, err := cel.NewEnv(cel.Declarations(
+		decls.NewVar(roleValidatorVarClientIP, decls.String),
+		decls.NewVar(roleValidatorVarInstanceCreated, decls.Timestamp),
+		decls.NewVar(roleValidatorVarInstanceID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceManager, decls.String),
+		decls.NewVar(roleValidatorVarInstanceManagerID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceName, decls.String),
+		decls.NewVar(roleValidatorVarInstancePublicIP, decls.String),
+		decls.NewVar(roleValidatorVarInstanceSecurityGroupIDs, decls.NewListType(decls.String)),
+		decls.NewVar(roleValidatorVarInstanceSecurityGroupNames, decls.NewListType(decls.String)),
+		decls.NewVar(roleValidatorVarInstanceTags, decls.NewMapType(decls.String, decls.String)),
+		decls.NewVar(roleValidatorVarInstanceZoneID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceZoneName, decls.String),
+		decls.NewVar(roleValidatorVarNow, decls.Timestamp),
+	))
+	if err != nil {
+		return nil, err
+	}
+
+	ast, issues := env.Compile(expression)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("%w: %s: %s",
+			errInvalidFieldValue,
+			"validator",
+			issues.Err()) // nolint:errorlint
+	}
+	if ast.ResultType().String() != "primitive:BOOL" {
+		return nil, fmt.Errorf("bad expression: result type should be boolean")
+	}
+
+	p, err := env.Program(ast,
+		cel.EvalOptions(cel.OptExhaustiveEval, cel.OptPartialEval))
+	if err != nil {
+		return nil, err
+	}
+
+	return p, nil
 }
