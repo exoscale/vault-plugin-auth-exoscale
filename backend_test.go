@@ -140,6 +140,7 @@ func (ts *backendTestSuite) TestBackendAuthRenew_Successful() {
 		ID:        egoscale.MustParseUUID(testInstanceID),
 		ZoneName:  testZoneName,
 		ZoneID:    egoscale.MustParseUUID(testZoneID),
+		Manager:   "instancepool",
 		ManagerID: egoscale.MustParseUUID(testInstancePoolID),
 		Nic:       []egoscale.Nic{{IPAddress: testInstanceIPAddress, IsDefault: true}},
 	}})
