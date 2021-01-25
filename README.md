@@ -4,7 +4,7 @@
 
 This is a [backend plugin][vault-doc-plugins] plugin to be used with HashiCorp [Vault](https://www.vaultproject.io/). This plugin authenticates Vault clients based on Exoscale Compute instance properties.
 
-This guide assumes you have already installed Vault and have a basic understanding of how Vault works. Otherwise, first read this guide on how to [get started with Vault][vaultdocintro].
+This guide assumes you have already installed Vault and have a basic understanding of how Vault works. Otherwise, first read this guide on how to [get started with Vault][vault-doc-intro].
 
 **Please note**: If you believe you have found a security issue in this plugin, _please responsibly disclose_ by contacting us at [security@exoscale.com](mailto:security@exoscale.com) instead of opening an issue at GitHub.
 
