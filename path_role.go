@@ -3,6 +3,8 @@ package exoscale
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/exoscale/egoscale"
@@ -19,28 +21,81 @@ const (
 
 	roleKeyName      = "name"
 	roleKeyValidator = "validator"
+
+	roleValidatorVarClientIP                   = "client_ip"
+	roleValidatorVarInstanceCreated            = "instance_created"
+	roleValidatorVarInstanceID                 = "instance_id"
+	roleValidatorVarInstanceManager            = "instance_manager"
+	roleValidatorVarInstanceManagerID          = "instance_manager_id"
+	roleValidatorVarInstanceName               = "instance_name"
+	roleValidatorVarInstancePublicIP           = "instance_public_ip"
+	roleValidatorVarInstanceSecurityGroupIDs   = "instance_security_group_ids"
+	roleValidatorVarInstanceSecurityGroupNames = "instance_security_group_names"
+	roleValidatorVarInstanceTags               = "instance_tags"
+	roleValidatorVarInstanceZoneID             = "instance_zone_id"
+	roleValidatorVarInstanceZoneName           = "instance_zone_name"
+	roleValidatorVarNow                        = "now"
+
+	defaultRoleValidator = roleValidatorVarClientIP + " == " + roleValidatorVarInstancePublicIP
 )
 
 var (
+	roleValidatorsVars = map[string]string{
+		roleValidatorVarClientIP:                   "IP address of the Vault client (string)",
+		roleValidatorVarInstanceCreated:            "creation date of the instance (timestamp)",
+		roleValidatorVarInstanceID:                 "ID of the instance (string)",
+		roleValidatorVarInstanceManager:            "type of the instance manager, if any (string)",
+		roleValidatorVarInstanceManagerID:          "ID of the instance manager, if any (string)",
+		roleValidatorVarInstanceName:               "name of the instance (string)",
+		roleValidatorVarInstancePublicIP:           "public IPv4 address of the instance (string)",
+		roleValidatorVarInstanceSecurityGroupIDs:   "list of Security Group IDs the instance belongs to (list of strings)",
+		roleValidatorVarInstanceSecurityGroupNames: "list of Security Group names the instance belongs to (list of strings)",
+		roleValidatorVarInstanceTags:               "map of instance tags (map[string]string)",
+		roleValidatorVarInstanceZoneID:             "ID of the instance's zone (string)",
+		roleValidatorVarInstanceZoneName:           "name of the instance's zone (string)",
+		roleValidatorVarNow:                        "current timestamp (timestamp)",
+	}
+
 	pathListRolesHelpSyn  = "List the configured backend roles"
 	pathListRolesHelpDesc = `
-This endpoint returns a list of the configured backend roles.
+This endpoint returns a list of configured backend roles.
 `
 
 	pathRoleHelpSyn  = "Manage backend roles"
-	pathRoleHelpDesc = `
+	pathRoleHelpDesc = fmt.Sprintf(`
 This endpoint manages backend roles, which are used to determine how Vault
 clients running on Exoscale Compute instances must be authenticated by the
 exoscale auth method.
 
-When creating a role, the following checks (disabled by default) can be
-performed:
+When creating a role, the validator CEL[0] expression can contain the following
+variables:
 
-  * The specified Compute instance must be member of a specific Instance Pool.
-  * The client (requester) IP address must match the specified Compute
-    instance's IP address.
-  * The specified Compute instance must not have been created too long ago.
-`
+%s
+
+If no validation expression is provided during the creation of a role, the
+following expression is set by default:
+
+  %s
+
+[0]: https://github.com/google/cel-spec
+`, func() string {
+		var (
+			vars = make([]string, 0)
+			out  strings.Builder
+		)
+
+		for k := range roleValidatorsVars {
+			vars = append(vars, k)
+		}
+		sort.Strings(vars)
+		for _, v := range vars {
+			_, _ = fmt.Fprintf(&out, "  * %s: %s\n", v, roleValidatorsVars[v])
+		}
+
+		return out.String()
+	}(),
+		defaultRoleValidator,
+	)
 )
 
 type backendRole struct {
@@ -49,42 +104,8 @@ type backendRole struct {
 	tokenutil.TokenParams
 }
 
-func buildProgram(expression string) (cel.Program, error) {
-	env, err := cel.NewEnv(cel.Declarations(
-		decls.NewVar("client_ip", decls.String),
-		decls.NewVar("created", decls.Timestamp),
-		decls.NewVar("id", decls.String),
-		decls.NewVar("manager", decls.String),
-		decls.NewVar("manager_id", decls.String),
-		decls.NewVar("name", decls.String),
-		decls.NewVar("now", decls.Timestamp),
-		decls.NewVar("public_ip", decls.String),
-		decls.NewVar("security_group_names", decls.NewListType(decls.String)),
-		decls.NewVar("security_group_ids", decls.NewListType(decls.String)),
-		decls.NewVar("tags", decls.NewMapType(decls.String, decls.String)),
-		decls.NewVar("zone", decls.String),
-		decls.NewVar("zone_id", decls.String),
-	))
-	if err != nil {
-		return nil, err
-	}
-
-	ast, issues := env.Compile(expression)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("type-check error: %w", issues.Err())
-	}
-	if ast.ResultType().String() != "primitive:BOOL" {
-		return nil, fmt.Errorf("bad expression: result type should be boolean")
-	}
-	p, err := env.Program(ast)
-	if err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
 func (r *backendRole) checkInstance(req *logical.Request, instance *egoscale.VirtualMachine) error {
-	p, err := buildProgram(r.Validator)
+	p, err := buildCELProgram(r.Validator)
 	if err != nil {
 		return err
 	}
@@ -102,40 +123,44 @@ func (r *backendRole) checkInstance(req *logical.Request, instance *egoscale.Vir
 			break
 		}
 	}
+
 	sgNames := make([]string, 0)
 	sgIDs := make([]string, 0)
 	for _, sg := range instance.SecurityGroup {
 		sgNames = append(sgNames, sg.Name)
 		sgIDs = append(sgIDs, sg.ID.String())
 	}
-	var managerid string
+
+	var managerID string
 	if instance.ManagerID != nil {
-		managerid = instance.ManagerID.String()
+		managerID = instance.ManagerID.String()
 	}
+
 	evalContext := map[string]interface{}{
-		"client_ip":            req.Connection.RemoteAddr,
-		"created":              created,
-		"id":                   instance.ID.String(),
-		"manager":              instance.Manager,
-		"manager_id":           managerid,
-		"name":                 instance.Name,
-		"now":                  time.Now(),
-		"public_ip":            ipaddress,
-		"security_group_names": sgNames,
-		"security_group_ids":   sgIDs,
-		"tags":                 tags,
-		"zone":                 instance.ZoneName,
-		"zone_id":              instance.ZoneID,
+		roleValidatorVarClientIP:                   req.Connection.RemoteAddr,
+		roleValidatorVarInstanceCreated:            created,
+		roleValidatorVarInstanceID:                 instance.ID.String(),
+		roleValidatorVarInstanceManager:            instance.Manager,
+		roleValidatorVarInstanceManagerID:          managerID,
+		roleValidatorVarInstanceName:               instance.Name,
+		roleValidatorVarInstancePublicIP:           ipaddress,
+		roleValidatorVarInstanceSecurityGroupIDs:   sgIDs,
+		roleValidatorVarInstanceSecurityGroupNames: sgNames,
+		roleValidatorVarInstanceTags:               tags,
+		roleValidatorVarInstanceZoneID:             instance.ZoneID.String(),
+		roleValidatorVarInstanceZoneName:           instance.ZoneName,
+		roleValidatorVarNow:                        time.Now(),
 	}
+
 	result, _, err := p.Eval(evalContext)
 	if err != nil {
 		return err
 	}
 
-	success := result.Value().(bool)
-	if !success {
-		return fmt.Errorf("failed validation")
+	if success := result.Value().(bool); !success {
+		return fmt.Errorf("%w: role validation failed", errAuthFailed)
 	}
+
 	return nil
 }
 
@@ -164,7 +189,7 @@ func pathRole(b *exoscaleBackend) *framework.Path {
 			roleKeyValidator: {
 				Type:        framework.TypeString,
 				Description: "Validation expression in CEL",
-				Default:     "client_ip == public_ip",
+				Default:     defaultRoleValidator,
 				Required:    true,
 			},
 		},
@@ -246,13 +271,17 @@ func (b *exoscaleBackend) writeRole(ctx context.Context, req *logical.Request,
 		role = &backendRole{}
 	}
 
-	if v, ok := data.GetOk(roleKeyValidator); ok {
-		role.Validator = v.(string)
-		_, err := buildProgram(role.Validator)
-		if err != nil {
-			return nil, err
+	role.Validator = data.Get(roleKeyValidator).(string)
+	if _, err = buildCELProgram(role.Validator); err != nil {
+		if errors.Is(err, errInvalidFieldValue) {
+			return logical.ErrorResponse(err.Error()), nil
 		}
+		return nil, err
 	}
+
+	b.Logger().Debug(fmt.Sprintf("creating role %q", name),
+		"validator", role.Validator,
+	)
 
 	if err := role.ParseTokenFields(req, data); err != nil {
 		return nil, err
@@ -278,4 +307,44 @@ func (b *exoscaleBackend) deleteRole(ctx context.Context, req *logical.Request,
 	}
 
 	return nil, nil
+}
+
+func buildCELProgram(expression string) (cel.Program, error) {
+	env, err := cel.NewEnv(cel.Declarations(
+		decls.NewVar(roleValidatorVarClientIP, decls.String),
+		decls.NewVar(roleValidatorVarInstanceCreated, decls.Timestamp),
+		decls.NewVar(roleValidatorVarInstanceID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceManager, decls.String),
+		decls.NewVar(roleValidatorVarInstanceManagerID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceName, decls.String),
+		decls.NewVar(roleValidatorVarInstancePublicIP, decls.String),
+		decls.NewVar(roleValidatorVarInstanceSecurityGroupIDs, decls.NewListType(decls.String)),
+		decls.NewVar(roleValidatorVarInstanceSecurityGroupNames, decls.NewListType(decls.String)),
+		decls.NewVar(roleValidatorVarInstanceTags, decls.NewMapType(decls.String, decls.String)),
+		decls.NewVar(roleValidatorVarInstanceZoneID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceZoneName, decls.String),
+		decls.NewVar(roleValidatorVarNow, decls.Timestamp),
+	))
+	if err != nil {
+		return nil, err
+	}
+
+	ast, issues := env.Compile(expression)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("%w: %s: %s",
+			errInvalidFieldValue,
+			"validator",
+			issues.Err()) // nolint:errorlint
+	}
+	if ast.ResultType().String() != "primitive:BOOL" {
+		return nil, fmt.Errorf("bad expression: result type should be boolean")
+	}
+
+	p, err := env.Program(ast,
+		cel.EvalOptions(cel.OptExhaustiveEval, cel.OptPartialEval))
+	if err != nil {
+		return nil, err
+	}
+
+	return p, nil
 }
