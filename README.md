@@ -114,7 +114,7 @@ policies             ["ci-worker" "default"]
 The complete backend plugin usage documentation is available through the command `vault path-help auth/exoscale`.
 
 
-[cel]: https://opensource.google/projects/cel
+[cel]: https://github.com/google/cel-spec/blob/master/doc/langdef.md
 [exo-doc-instance-pools]: https://community.exoscale.com/documentation/compute/instance-pools/
 [gh-releases]: https://github.com/exoscale/vault-plugin-auth-exoscale/releases
 [vault-doc-intro]: https://www.vaultproject.io/intro/getting-started/install.html
