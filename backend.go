@@ -200,6 +200,14 @@ func Factory(ctx context.Context, config *logical.BackendConfig) (logical.Backen
 		},
 	}
 
+	backendConfig, err := backend.config(ctx, config.StorageView)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to fetch backend config from storage")
+	}
+	if backendConfig != nil {
+		backend.exo = egoscale.NewClient(backendConfig.APIEndpoint, backendConfig.APIKey, backendConfig.APISecret)
+	}
+
 	if err := backend.Setup(ctx, config); err != nil {
 		return nil, errors.Wrap(err, "failed to create factory")
 	}
