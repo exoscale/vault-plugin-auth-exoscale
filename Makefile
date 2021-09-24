@@ -8,4 +8,5 @@ PROJECT_URL := https://$(PACKAGE)
 GO_LD_FLAGS := -ldflags "-s -w -X $(PACKAGE)/version.Version=${VERSION} \
 									-X $(PACKAGE)/version.Commit=${GIT_REVISION}"
 GO_MAIN_PKG_PATH := ./cmd/vault-plugin-auth-exoscale
-EXTRA_ARGS := -parallel 3 -count=1 -failfast
+
+GO_TEST_EXTRA_ARGS := -parallel 3 -count=1 -failfast
