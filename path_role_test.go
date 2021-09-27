@@ -3,47 +3,64 @@ package exoscale
 import (
 	"context"
 	"strings"
+	"testing"
 
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
 var (
-	testRoleName         = "read-only"
-	testBadRoleValidator = "zone"
-	testRole             = backendRole{Validator: defaultRoleValidator}
+	testRoleName = "read-only"
+
+	testRole = backendRole{Validator: defaultRoleValidator}
 )
 
 func (ts *backendTestSuite) TestPathRoleWrite() {
-	var actual backendRole
-
-	res, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
-		Storage:   ts.storage,
-		Operation: logical.CreateOperation,
-		Path:      roleStoragePathPrefix + testRoleName,
-		Data: map[string]interface{}{
-			roleKeyValidator: testRole.Validator,
+	tests := []struct {
+		name         string
+		resCheckFunc func(*backendTestSuite, *logical.Response, error)
+		reqData      map[string]interface{}
+		wantErr      bool
+	}{
+		{
+			name: "fail_bad_validator",
+			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, err error) {
+				ts.Require().True(strings.Contains(res.Error().Error(), "invalid field value: validator"))
+			},
+			reqData: map[string]interface{}{
+				roleKeyValidator: "lolnope",
+			},
 		},
-	})
-	ts.Require().NoError(err, "request failed")
-	ts.Require().NoError(res.Error())
-
-	entry, err := ts.storage.Get(context.Background(), roleStoragePathPrefix+testRoleName)
-	ts.Require().NoError(err)
-	ts.Require().NoError(entry.DecodeJSON(&actual))
-	ts.Require().Equal(testRole, actual)
-}
-
-func (ts *backendTestSuite) TestPathRoleWriteBadValidator() {
-	res, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
-		Storage:   ts.storage,
-		Operation: logical.CreateOperation,
-		Path:      roleStoragePathPrefix + testRoleName,
-		Data: map[string]interface{}{
-			roleKeyValidator: testBadRoleValidator,
+		{
+			name: "ok",
+			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, _ error) {
+				var actual backendRole
+				entry, err := ts.storage.Get(context.Background(), roleStoragePathPrefix+testRoleName)
+				ts.Require().NoError(err)
+				ts.Require().NoError(entry.DecodeJSON(&actual))
+				ts.Require().Equal(testRole, actual)
+			},
+			reqData: map[string]interface{}{
+				roleKeyValidator: testRole.Validator,
+			},
 		},
-	})
-	ts.Require().NoError(err)
-	ts.Require().True(strings.Contains(res.Error().Error(), "invalid field value: validator"))
+	}
+
+	for _, tt := range tests {
+		ts.T().Run(tt.name, func(t *testing.T) {
+			res, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
+				Storage:   ts.storage,
+				Operation: logical.CreateOperation,
+				Path:      roleStoragePathPrefix + testRoleName,
+				Data:      tt.reqData,
+			})
+			if err != nil != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			tt.resCheckFunc(ts, res, err)
+		})
+	}
 }
 
 func (ts *backendTestSuite) TestPathRoleRead() {
