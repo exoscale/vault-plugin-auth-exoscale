@@ -3,10 +3,10 @@ package exoscale
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/exoscale/egoscale"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/suite"
@@ -33,6 +33,7 @@ func (ts *backendTestSuite) storeEntry(k string, v interface{}) {
 func (ts *backendTestSuite) SetupTest() {
 	config := logical.TestBackendConfig()
 	config.StorageView = &logical.InmemStorage{}
+	config.Logger = hclog.NewNullLogger()
 
 	backendConfigEntry, err := logical.StorageEntryJSON(configStoragePath, backendConfig{
 		APIEndpoint: testConfigAPIEndpoint,
@@ -112,55 +113,86 @@ func (ts *backendTestSuite) mockListVirtualMachinesAPI(res []egoscale.VirtualMac
 		})
 }
 
-func (ts *backendTestSuite) TestBackendAuthRenew_DenyClientMissingInstance() {
-	ts.storeEntry(roleStoragePathPrefix+testRoleName, testRole)
-	ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{})
-
-	_, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
-		Storage:    ts.storage,
-		Operation:  logical.RenewOperation,
-		Connection: &logical.Connection{RemoteAddr: testInstanceIPAddress.String()},
-		Auth: &logical.Auth{
-			InternalData: map[string]interface{}{
+func (ts *backendTestSuite) TestBackendAuthRenew() {
+	tests := []struct {
+		name         string
+		setupFunc    func(*backendTestSuite)
+		resCheckFunc func(*backendTestSuite, *logical.Response, error)
+		internalData map[string]interface{}
+		wantErr      bool
+	}{
+		{
+			name: "fail_permission_denied",
+			setupFunc: func(ts *backendTestSuite) {
+				ts.storeEntry(roleStoragePathPrefix+testRoleName, testRole)
+				ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{})
+			},
+			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, err error) {
+				ts.Require().EqualError(err, logical.ErrPermissionDenied.Error())
+			},
+			internalData: map[string]interface{}{
+				"instance_id": testInstanceID,
+				"role":        testRoleName,
+				"zone":        testZoneName,
+			},
+			wantErr: true,
+		},
+		{
+			name: "ok",
+			setupFunc: func(ts *backendTestSuite) {
+				ts.storeEntry(roleStoragePathPrefix+testRoleName, testRole)
+				ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{{
+					Name:      testInstanceName,
+					Created:   testInstanceCreated,
+					ID:        egoscale.MustParseUUID(testInstanceID),
+					ZoneName:  testZoneName,
+					ZoneID:    egoscale.MustParseUUID(testZoneID),
+					Manager:   "instancepool",
+					ManagerID: egoscale.MustParseUUID(testInstancePoolID),
+					Nic:       []egoscale.Nic{{IPAddress: testInstanceIPAddress, IsDefault: true}},
+				}})
+			},
+			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, _ error) {
+				ts.Require().Equal(
+					map[string]interface{}{
+						"instance_id": testInstanceID,
+						"role":        testRoleName,
+						"zone":        testZoneName,
+					},
+					res.Auth.InternalData)
+			},
+			internalData: map[string]interface{}{
 				"instance_id": testInstanceID,
 				"role":        testRoleName,
 				"zone":        testZoneName,
 			},
 		},
-	})
-	ts.Require().Error(err, "request should have failed")
-	ts.Require().True(strings.Contains(err.Error(), "permission denied"))
-}
-
-func (ts *backendTestSuite) TestBackendAuthRenew_Successful() {
-	ts.storeEntry(roleStoragePathPrefix+testRoleName, testRole)
-	ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{{
-		Name:      testInstanceName,
-		Created:   testInstanceCreated,
-		ID:        egoscale.MustParseUUID(testInstanceID),
-		ZoneName:  testZoneName,
-		ZoneID:    egoscale.MustParseUUID(testZoneID),
-		Manager:   "instancepool",
-		ManagerID: egoscale.MustParseUUID(testInstancePoolID),
-		Nic:       []egoscale.Nic{{IPAddress: testInstanceIPAddress, IsDefault: true}},
-	}})
-
-	expectedInternalData := map[string]interface{}{
-		"instance_id": testInstanceID,
-		"role":        testRoleName,
-		"zone":        testZoneName,
 	}
 
-	res, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
-		Storage:    ts.storage,
-		Operation:  logical.RenewOperation,
-		Connection: &logical.Connection{RemoteAddr: testInstanceIPAddress.String()},
-		Auth: &logical.Auth{
-			InternalData: expectedInternalData,
-		},
-	})
-	ts.Require().NoError(err)
-	ts.Require().Equal(expectedInternalData, res.Auth.InternalData)
+	for _, tt := range tests {
+		httpmock.Reset()
+
+		ts.T().Run(tt.name, func(t *testing.T) {
+			if setup := tt.setupFunc; setup != nil {
+				setup(ts)
+			}
+
+			res, err := ts.backend.HandleRequest(context.Background(), &logical.Request{
+				Storage:    ts.storage,
+				Operation:  logical.RenewOperation,
+				Connection: &logical.Connection{RemoteAddr: testInstanceIPAddress.String()},
+				Auth: &logical.Auth{
+					InternalData: tt.internalData,
+				},
+			})
+			if err != nil != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			tt.resCheckFunc(ts, res, err)
+		})
+	}
 }
 
 func TestSuiteAccBackendTestSuite(t *testing.T) {

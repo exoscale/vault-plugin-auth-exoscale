@@ -53,12 +53,12 @@ func (b *exoscaleBackend) authRenew(ctx context.Context,
 	}
 
 	var roleName string
-	if v, ok := req.Auth.InternalData["role"]; !ok {
+	if v, ok := req.Auth.InternalData["role"]; ok {
+		roleName = v.(string)
+	} else {
 		b.Logger().Error("role information missing from token internal data",
 			"client_remote_addr", req.Connection.RemoteAddr)
 		return nil, errInternalError
-	} else {
-		roleName = v.(string)
 	}
 
 	role, err := b.roleConfig(ctx, req.Storage, roleName)
@@ -97,66 +97,52 @@ func (b *exoscaleBackend) authRenew(ctx context.Context,
 
 func (b *exoscaleBackend) auth(ctx context.Context, role *backendRole,
 	req *logical.Request, data *framework.FieldData) (*egoscale.VirtualMachine, error) {
-	var (
-		zoneName   string
-		instanceID *egoscale.UUID
-	)
+	var instanceID *egoscale.UUID
+
+	config, err := b.config(ctx, req.Storage)
+	if err != nil {
+		return nil, errors.New("backend is not configured")
+	}
 
 	if data != nil {
 		// Initial login mode
 
-		if v, ok := data.GetOk("zone"); ok {
-			zoneName = v.(string)
-		}
-		if zoneName == "" {
-			return nil, fmt.Errorf("%w: %s", errMissingField, "zone")
+		param := authLoginParamInstance
+		// In AppRole-compatible mode, we expect `role`/`instance` parameters to be passed using
+		// the same name as in the AppRole authentication method (`role_id`/`secret_id`).
+		if config.AppRoleMode {
+			param = authLoginParamSecretID
 		}
 
-		if v, ok := data.GetOk("instance"); ok {
-			uuid, err := egoscale.ParseUUID(v.(string))
-			if err != nil {
-				return nil, fmt.Errorf("%w: %s: %s", errInvalidFieldValue, "instance", err) // nolint:errorlint
-			}
-			instanceID = uuid
+		uuid, err := egoscale.ParseUUID(data.Get(param).(string))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %s", errInvalidFieldValue, param, err) // nolint:errorlint
 		}
+		instanceID = uuid
 	} else {
 		// Token renewal mode
 
-		if v, ok := req.Auth.InternalData["zone"]; !ok {
-			return nil, fmt.Errorf("%w: zone information missing from token internal data", errInternalError)
+		if v, ok := req.Auth.InternalData["instance_id"]; ok {
+			instanceID = egoscale.MustParseUUID(v.(string))
 		} else {
-			zoneName = v.(string)
-		}
-
-		if v, ok := req.Auth.InternalData["instance_id"]; !ok {
 			return nil, fmt.Errorf("%w: instance_id information missing from token internal data",
 				errInternalError)
-		} else {
-			instanceID = egoscale.MustParseUUID(v.(string))
 		}
 	}
 
-	z, err := b.exo.GetWithContext(ctx, &egoscale.Zone{Name: zoneName})
-	if err != nil {
-		return nil, fmt.Errorf("%w: unable to retrieve zone information: %s",
-			errInternalError,
-			err) // nolint:errorlint
-	}
-	zone := z.(*egoscale.Zone)
-
 	if instanceID == nil {
-		return nil, fmt.Errorf("%w: %s", errMissingField, "instance")
+		return nil, fmt.Errorf("%w: %s", errMissingField, authLoginParamInstance)
 	}
 	i, err := b.exo.GetWithContext(ctx, &egoscale.VirtualMachine{
-		ID:     instanceID,
-		ZoneID: zone.ID,
+		ID:       instanceID,
+		ZoneName: config.Zone,
 	})
 	if err != nil {
 		if errors.Is(err, egoscale.ErrNotFound) {
 			return nil, fmt.Errorf("%w: instance %s does not exist in zone %s",
 				errAuthFailed,
 				instanceID,
-				zoneName)
+				config.Zone)
 		}
 		return nil, fmt.Errorf("%w: unable to retrieve Compute instance information: %s",
 			errInternalError,
@@ -179,7 +165,7 @@ func init() {
 		egoscale.UserAgent)
 }
 
-func Factory(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
+func Factory(ctx context.Context, backendConfig *logical.BackendConfig) (logical.Backend, error) {
 	var backend exoscaleBackend
 
 	backend.Backend = &framework.Backend{
@@ -200,15 +186,15 @@ func Factory(ctx context.Context, config *logical.BackendConfig) (logical.Backen
 		},
 	}
 
-	backendConfig, err := backend.config(ctx, config.StorageView)
+	config, err := backend.config(ctx, backendConfig.StorageView)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to fetch backend config from storage")
 	}
-	if backendConfig != nil {
-		backend.exo = egoscale.NewClient(backendConfig.APIEndpoint, backendConfig.APIKey, backendConfig.APISecret)
+	if config != nil {
+		backend.exo = egoscale.NewClient(config.APIEndpoint, config.APIKey, config.APISecret)
 	}
 
-	if err := backend.Setup(ctx, config); err != nil {
+	if err := backend.Setup(ctx, backendConfig); err != nil {
 		return nil, errors.Wrap(err, "failed to create factory")
 	}
 

@@ -61,12 +61,13 @@ $ vault auth enable exoscale
 
 ### Auth Backend Configuration
 
-In order to be able to authenticate Vault clients from Exoscale, the backend must be configured with Exoscale API credentials beforehand:
+In order to be able to authenticate Vault clients from Exoscale, the backend must be configured with Exoscale API credentials as well as an Exoscale zone beforehand:
 
 ```sh
-$ vault write auth/exoscale/config \
-    api_key=$EXOSCALE_API_KEY \
-    api_secret=$EXOSCALE_API_SECRET
+$ vault write auth/exoscale/config  \
+    api_key=$EXOSCALE_API_KEY       \
+    api_secret=$EXOSCALE_API_SECRET \
+    zone=ch-gva-2
 ```
 
 
@@ -95,8 +96,7 @@ Clients wishing to log into a Vault server to retrieve a token must specify the 
 ```sh
 $ vault write auth/exoscale/login \
     role=ci-worker \
-    instance=6d540f20-ac97-dd6a-5d67-cc11a5e224a5 \
-    zone=de-muc-1
+    instance=6d540f20-ac97-dd6a-5d67-cc11a5e224a5
 Key                  Value
 ---                  -----
 token                s.brmD5tCpa8ea6RoKF9O9NCOP

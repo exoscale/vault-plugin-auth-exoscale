@@ -16,6 +16,8 @@ const (
 	configKeyAPIEndpoint = "api_endpoint"
 	configKeyAPIKey      = "api_key"
 	configKeyAPISecret   = "api_secret"
+	configKeyAppRoleMode = "approle_mode"
+	configKeyZone        = "zone"
 )
 
 var (
@@ -27,7 +29,10 @@ Vault clients using this authentication method.
 `
 )
 
-var errMissingAPICredentials = errors.New("missing API credentials")
+var (
+	errMissingAPICredentials = errors.New("missing API credentials")
+	errMissingZone           = errors.New("missing zone")
+)
 
 func pathConfig(b *exoscaleBackend) *framework.Path {
 	p := &framework.Path{
@@ -46,6 +51,14 @@ func pathConfig(b *exoscaleBackend) *framework.Path {
 				Type:         framework.TypeString,
 				Description:  "Exoscale API secret",
 				DisplayAttrs: &framework.DisplayAttributes{Sensitive: true},
+			},
+			configKeyAppRoleMode: {
+				Type:        framework.TypeBool,
+				Description: "Run in AppRole-compatible mode",
+			},
+			configKeyZone: {
+				Type:        framework.TypeString,
+				Description: "Exoscale zone to look Compute instances into",
 			},
 		},
 
@@ -75,6 +88,8 @@ func (b *exoscaleBackend) pathConfigRead(ctx context.Context,
 		configKeyAPIEndpoint: config.APIEndpoint,
 		configKeyAPIKey:      config.APIKey,
 		configKeyAPISecret:   config.APISecret,
+		configKeyAppRoleMode: config.AppRoleMode,
+		configKeyZone:        config.Zone,
 	}
 
 	return &logical.Response{
@@ -100,6 +115,16 @@ func (b *exoscaleBackend) pathConfigWrite(ctx context.Context,
 		return nil, errMissingAPICredentials
 	}
 
+	if v, ok := data.GetOk(configKeyZone); ok {
+		config.Zone = v.(string)
+	} else {
+		return nil, errMissingZone
+	}
+
+	if v, ok := data.GetOk(configKeyAppRoleMode); ok {
+		config.AppRoleMode = v.(bool)
+	}
+
 	entry, err := logical.StorageEntryJSON(configStoragePath, config)
 	if err != nil {
 		return nil, err
@@ -122,4 +147,6 @@ type backendConfig struct {
 	APIEndpoint string `json:"api_endpoint"`
 	APIKey      string `json:"api_key"`
 	APISecret   string `json:"api_secret"`
+	AppRoleMode bool   `json:"approle_mode"`
+	Zone        string `json:"zone"`
 }

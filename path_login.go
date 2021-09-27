@@ -9,6 +9,13 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
+const (
+	authLoginParamInstance = "instance"
+	authLoginParamRole     = "role"
+	authLoginParamRoleID   = "role_id"
+	authLoginParamSecretID = "secret_id"
+)
+
 var (
 	pathLoginHelpSyn  = "Log in via an Exoscale Compute Instance"
 	pathLoginHelpDesc = `
@@ -33,20 +40,26 @@ func pathLogin(b *exoscaleBackend) *framework.Path {
 	return &framework.Path{
 		Pattern: "login",
 		Fields: map[string]*framework.FieldSchema{
-			"instance": {
+			authLoginParamInstance: {
 				Type:        framework.TypeString,
 				Description: "Instance ID",
-				Required:    true,
 			},
-			"role": {
+			authLoginParamRole: {
 				Type:        framework.TypeString,
 				Description: "Role name",
-				Required:    true,
+			},
+			authLoginParamRoleID: {
+				Type:        framework.TypeString,
+				Description: "AppRole RoleID (role name)",
+			},
+			authLoginParamSecretID: {
+				Type:        framework.TypeString,
+				Description: "AppRole SecretID (instance ID)",
 			},
 			"zone": {
 				Type:        framework.TypeString,
 				Description: "Instance zone",
-				Required:    true,
+				Deprecated:  true,
 			},
 		},
 
@@ -65,10 +78,25 @@ func (b *exoscaleBackend) pathLoginWrite(ctx context.Context,
 		return nil, errors.New("backend is not configured")
 	}
 
-	if _, ok := data.GetOk("role"); !ok {
-		return logical.ErrorResponse(fmt.Sprintf("%s: %s", errMissingField, "role")), nil
+	config, err := b.config(ctx, req.Storage)
+	if err != nil {
+		return nil, errors.New("backend is not configured")
 	}
-	roleName := data.Get("role").(string)
+
+	roleParamName := authLoginParamRole
+	instanceParamName := authLoginParamInstance
+	// In AppRole-compatible mode, we expect `role`/`instance` parameters to be passed using
+	// the same name as in the AppRole authentication method (`role_id`/`secret_id`).
+	if config.AppRoleMode {
+		roleParamName = authLoginParamRoleID
+		instanceParamName = authLoginParamSecretID
+	}
+
+	if _, ok := data.GetOk(roleParamName); !ok {
+		return logical.ErrorResponse(fmt.Sprintf("%v: %s", errMissingField, roleParamName)), nil
+	}
+	roleName := data.Get(roleParamName).(string)
+
 	role, err := b.roleConfig(ctx, req.Storage, roleName)
 	if err != nil {
 		b.Logger().Error(fmt.Sprintf("unable to retrieve role %q: %s", roleName, err),
@@ -77,6 +105,10 @@ func (b *exoscaleBackend) pathLoginWrite(ctx context.Context,
 	}
 	if role == nil {
 		return logical.ErrorResponse(fmt.Sprintf("role %q not found", roleName)), nil
+	}
+
+	if _, ok := data.GetOk(instanceParamName); !ok {
+		return logical.ErrorResponse(fmt.Sprintf("%v: %s", errMissingField, instanceParamName)), nil
 	}
 
 	instance, err := b.auth(ctx, role, req, data)
