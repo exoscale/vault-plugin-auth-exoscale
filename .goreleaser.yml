@@ -27,7 +27,6 @@ snapshot:
   name_template: "{{ .Tag }}-snapshot"
 
 release:
-  draft: true
   github:
     owner: exoscale
     name: vault-plugin-auth-exoscale
