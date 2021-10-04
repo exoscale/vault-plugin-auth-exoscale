@@ -2,18 +2,18 @@ package exoscale
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/exoscale/egoscale"
+	egoscale "github.com/exoscale/egoscale/v2"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/tokenutil"
 	"github.com/hashicorp/vault/sdk/logical"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -27,13 +27,13 @@ const (
 	roleValidatorVarInstanceID                 = "instance_id"
 	roleValidatorVarInstanceManager            = "instance_manager"
 	roleValidatorVarInstanceManagerID          = "instance_manager_id"
+	roleValidatorVarInstanceManagerName        = "instance_manager_name"
 	roleValidatorVarInstanceName               = "instance_name"
 	roleValidatorVarInstancePublicIP           = "instance_public_ip"
 	roleValidatorVarInstanceSecurityGroupIDs   = "instance_security_group_ids"
 	roleValidatorVarInstanceSecurityGroupNames = "instance_security_group_names"
-	roleValidatorVarInstanceTags               = "instance_tags"
-	roleValidatorVarInstanceZoneID             = "instance_zone_id"
-	roleValidatorVarInstanceZoneName           = "instance_zone_name"
+	roleValidatorVarInstanceLabels             = "instance_labels"
+	roleValidatorVarInstanceZone               = "instance_zone"
 	roleValidatorVarNow                        = "now"
 
 	defaultRoleValidator = roleValidatorVarClientIP + " == " + roleValidatorVarInstancePublicIP
@@ -46,13 +46,13 @@ var (
 		roleValidatorVarInstanceID:                 "ID of the instance (string)",
 		roleValidatorVarInstanceManager:            "type of the instance manager, if any (string)",
 		roleValidatorVarInstanceManagerID:          "ID of the instance manager, if any (string)",
+		roleValidatorVarInstanceManagerName:        "name of the instance manager, if any (string)",
 		roleValidatorVarInstanceName:               "name of the instance (string)",
 		roleValidatorVarInstancePublicIP:           "public IPv4 address of the instance (string)",
 		roleValidatorVarInstanceSecurityGroupIDs:   "list of Security Group IDs the instance belongs to (list of strings)",
 		roleValidatorVarInstanceSecurityGroupNames: "list of Security Group names the instance belongs to (list of strings)",
-		roleValidatorVarInstanceTags:               "map of instance tags (map[string]string)",
-		roleValidatorVarInstanceZoneID:             "ID of the instance's zone (string)",
-		roleValidatorVarInstanceZoneName:           "name of the instance's zone (string)",
+		roleValidatorVarInstanceLabels:             "map of instance labels (map[string]string)",
+		roleValidatorVarInstanceZone:               "name of the instance's zone (string)",
 		roleValidatorVarNow:                        "current timestamp (timestamp)",
 	}
 
@@ -104,51 +104,66 @@ type backendRole struct {
 	tokenutil.TokenParams
 }
 
-func (r *backendRole) checkInstance(req *logical.Request, instance *egoscale.VirtualMachine) error {
-	p, err := buildCELProgram(r.Validator)
+func (b *exoscaleBackend) checkInstanceRole(
+	ctx context.Context,
+	req *logical.Request,
+	instance *egoscale.Instance,
+	role *backendRole,
+) error {
+	p, err := buildCELProgram(role.Validator)
 	if err != nil {
 		return err
 	}
 
-	tags := make(map[string]string)
-	for _, t := range instance.Tags {
-		tags[t.Key] = t.Value
+	labels := make(map[string]string)
+	if instance.Labels != nil {
+		for k, v := range *instance.Labels {
+			labels[k] = v
+		}
 	}
 
-	created, _ := time.Parse("2006-01-02T15:04:05-0700", instance.Created)
-	var ipaddress string
-	for _, n := range instance.Nic {
-		if n.IsDefault {
-			ipaddress = n.IPAddress.String()
-			break
+	var managerType, managerID, managerName string
+	if instance.Manager != nil {
+		managerType = instance.Manager.Type
+		managerID = instance.Manager.ID
+		switch instance.Manager.Type {
+		case "instance-pool":
+			instancePool, err := b.exo.GetInstancePool(ctx, *instance.Zone, managerID)
+			if err != nil {
+				return fmt.Errorf("unable to retrieve Instance Pool %q: %w", managerID, err)
+			}
+			managerName = *instancePool.Name
+
+		default:
 		}
 	}
 
 	sgNames := make([]string, 0)
 	sgIDs := make([]string, 0)
-	for _, sg := range instance.SecurityGroup {
-		sgNames = append(sgNames, sg.Name)
-		sgIDs = append(sgIDs, sg.ID.String())
-	}
-
-	var managerID string
-	if instance.ManagerID != nil {
-		managerID = instance.ManagerID.String()
+	if instance.SecurityGroupIDs != nil {
+		for _, id := range *instance.SecurityGroupIDs {
+			sg, err := b.exo.GetSecurityGroup(ctx, *instance.Zone, id)
+			if err != nil {
+				return fmt.Errorf("unable to retrieve Security Group %q: %w", id, err)
+			}
+			sgIDs = append(sgIDs, *sg.ID)
+			sgNames = append(sgNames, *sg.Name)
+		}
 	}
 
 	evalContext := map[string]interface{}{
 		roleValidatorVarClientIP:                   req.Connection.RemoteAddr,
-		roleValidatorVarInstanceCreated:            created,
-		roleValidatorVarInstanceID:                 instance.ID.String(),
-		roleValidatorVarInstanceManager:            instance.Manager,
+		roleValidatorVarInstanceCreated:            *instance.CreatedAt,
+		roleValidatorVarInstanceID:                 *instance.ID,
+		roleValidatorVarInstanceManager:            managerType,
 		roleValidatorVarInstanceManagerID:          managerID,
+		roleValidatorVarInstanceManagerName:        managerName,
 		roleValidatorVarInstanceName:               instance.Name,
-		roleValidatorVarInstancePublicIP:           ipaddress,
+		roleValidatorVarInstancePublicIP:           instance.PublicIPAddress.String(),
 		roleValidatorVarInstanceSecurityGroupIDs:   sgIDs,
 		roleValidatorVarInstanceSecurityGroupNames: sgNames,
-		roleValidatorVarInstanceTags:               tags,
-		roleValidatorVarInstanceZoneID:             instance.ZoneID.String(),
-		roleValidatorVarInstanceZoneName:           instance.ZoneName,
+		roleValidatorVarInstanceLabels:             labels,
+		roleValidatorVarInstanceZone:               instance.Zone,
 		roleValidatorVarNow:                        time.Now(),
 	}
 
@@ -215,7 +230,7 @@ func (b *exoscaleBackend) roleConfig(ctx context.Context, storage logical.Storag
 
 	entry, err := storage.Get(ctx, roleStoragePathPrefix+name)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error retrieving role %q", name)
+		return nil, fmt.Errorf("unable to retrieve role %q: %w", name, err)
 	}
 	if entry == nil {
 		return nil, nil
@@ -228,8 +243,11 @@ func (b *exoscaleBackend) roleConfig(ctx context.Context, storage logical.Storag
 	return &role, nil
 }
 
-func (b *exoscaleBackend) listRoles(ctx context.Context, req *logical.Request,
-	_ *framework.FieldData) (*logical.Response, error) {
+func (b *exoscaleBackend) listRoles(
+	ctx context.Context,
+	req *logical.Request,
+	_ *framework.FieldData,
+) (*logical.Response, error) {
 	roles, err := req.Storage.List(ctx, roleStoragePathPrefix)
 	if err != nil {
 		return nil, err
@@ -238,8 +256,11 @@ func (b *exoscaleBackend) listRoles(ctx context.Context, req *logical.Request,
 	return logical.ListResponse(roles), nil
 }
 
-func (b *exoscaleBackend) readRole(ctx context.Context, req *logical.Request,
-	data *framework.FieldData) (*logical.Response, error) {
+func (b *exoscaleBackend) readRole(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	name := data.Get("name").(string)
 
 	role, err := b.roleConfig(ctx, req.Storage, name)
@@ -259,8 +280,11 @@ func (b *exoscaleBackend) readRole(ctx context.Context, req *logical.Request,
 	return &logical.Response{Data: d}, nil
 }
 
-func (b *exoscaleBackend) writeRole(ctx context.Context, req *logical.Request,
-	data *framework.FieldData) (*logical.Response, error) {
+func (b *exoscaleBackend) writeRole(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	name := data.Get("name").(string)
 
 	role, err := b.roleConfig(ctx, req.Storage, name)
@@ -279,7 +303,8 @@ func (b *exoscaleBackend) writeRole(ctx context.Context, req *logical.Request,
 		return nil, err
 	}
 
-	b.Logger().Debug(fmt.Sprintf("creating role %q", name),
+	b.Logger().Debug(
+		fmt.Sprintf("creating role %q", name),
 		"validator", role.Validator,
 	)
 
@@ -299,8 +324,11 @@ func (b *exoscaleBackend) writeRole(ctx context.Context, req *logical.Request,
 	return nil, nil
 }
 
-func (b *exoscaleBackend) deleteRole(ctx context.Context, req *logical.Request,
-	data *framework.FieldData) (*logical.Response, error) {
+func (b *exoscaleBackend) deleteRole(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	name := data.Get("name").(string)
 	if err := req.Storage.Delete(ctx, roleStoragePathPrefix+name); err != nil {
 		return nil, err
@@ -316,13 +344,13 @@ func buildCELProgram(expression string) (cel.Program, error) {
 		decls.NewVar(roleValidatorVarInstanceID, decls.String),
 		decls.NewVar(roleValidatorVarInstanceManager, decls.String),
 		decls.NewVar(roleValidatorVarInstanceManagerID, decls.String),
+		decls.NewVar(roleValidatorVarInstanceManagerName, decls.String),
 		decls.NewVar(roleValidatorVarInstanceName, decls.String),
 		decls.NewVar(roleValidatorVarInstancePublicIP, decls.String),
 		decls.NewVar(roleValidatorVarInstanceSecurityGroupIDs, decls.NewListType(decls.String)),
 		decls.NewVar(roleValidatorVarInstanceSecurityGroupNames, decls.NewListType(decls.String)),
-		decls.NewVar(roleValidatorVarInstanceTags, decls.NewMapType(decls.String, decls.String)),
-		decls.NewVar(roleValidatorVarInstanceZoneID, decls.String),
-		decls.NewVar(roleValidatorVarInstanceZoneName, decls.String),
+		decls.NewVar(roleValidatorVarInstanceLabels, decls.NewMapType(decls.String, decls.String)),
+		decls.NewVar(roleValidatorVarInstanceZone, decls.String),
 		decls.NewVar(roleValidatorVarNow, decls.Timestamp),
 	))
 	if err != nil {
@@ -331,10 +359,7 @@ func buildCELProgram(expression string) (cel.Program, error) {
 
 	ast, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("%w: %s: %s",
-			errInvalidFieldValue,
-			"validator",
-			issues.Err()) // nolint:errorlint
+		return nil, fmt.Errorf("%w: %s: %s", errInvalidFieldValue, "validator", issues.Err()) // nolint:errorlint
 	}
 	if ast.ResultType().String() != "primitive:BOOL" {
 		return nil, fmt.Errorf("bad expression: result type should be boolean")

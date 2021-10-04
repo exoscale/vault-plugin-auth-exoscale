@@ -3,13 +3,14 @@ package exoscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	"github.com/exoscale/egoscale"
+	egoscale "github.com/exoscale/egoscale/v2"
+	exoapi "github.com/exoscale/egoscale/v2/api"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	vaultsdkver "github.com/hashicorp/vault/sdk/version"
-	"github.com/pkg/errors"
 
 	"github.com/exoscale/vault-plugin-auth-exoscale/version"
 )
@@ -19,8 +20,14 @@ The Exoscale auth backend for Vault allows Exoscale Compute Instance Pool
 members to authenticate to a Vault server.
 `
 
+type exoscaleClient interface {
+	GetInstance(context.Context, string, string) (*egoscale.Instance, error)
+	GetInstancePool(context.Context, string, string) (*egoscale.InstancePool, error)
+	GetSecurityGroup(context.Context, string, string) (*egoscale.SecurityGroup, error)
+}
+
 type exoscaleBackend struct {
-	exo *egoscale.Client
+	exo exoscaleClient
 	*framework.Backend
 }
 
@@ -42,8 +49,11 @@ func (b *exoscaleBackend) config(ctx context.Context, storage logical.Storage) (
 	return &config, nil
 }
 
-func (b *exoscaleBackend) authRenew(ctx context.Context,
-	req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
+func (b *exoscaleBackend) authRenew(
+	ctx context.Context,
+	req *logical.Request,
+	_ *framework.FieldData,
+) (*logical.Response, error) {
 	if b.exo == nil {
 		return nil, errors.New("backend is not configured")
 	}
@@ -56,24 +66,30 @@ func (b *exoscaleBackend) authRenew(ctx context.Context,
 	if v, ok := req.Auth.InternalData["role"]; ok {
 		roleName = v.(string)
 	} else {
-		b.Logger().Error("role information missing from token internal data",
-			"client_remote_addr", req.Connection.RemoteAddr)
+		b.Logger().Error(
+			"role information missing from token internal data",
+			"client_remote_addr", req.Connection.RemoteAddr,
+		)
 		return nil, errInternalError
 	}
 
 	role, err := b.roleConfig(ctx, req.Storage, roleName)
 	if err != nil {
-		b.Logger().Error(fmt.Sprintf("unable to retrieve role %q: %s", roleName, err),
-			"client_remote_addr", req.Connection.RemoteAddr)
+		b.Logger().Error(
+			fmt.Sprintf("unable to retrieve role %q: %s", roleName, err),
+			"client_remote_addr", req.Connection.RemoteAddr,
+		)
 		return nil, errInternalError
 	}
 	if role == nil {
-		return logical.ErrorResponse(fmt.Sprintf("role %q not found", roleName)), nil
+		return logical.ErrorResponse("role %q not found", roleName), nil
 	}
 
 	if _, err = b.auth(ctx, role, req, nil); err != nil {
-		b.Logger().Error(err.Error(),
-			"client_remote_addr", req.Connection.RemoteAddr)
+		b.Logger().Error(
+			err.Error(),
+			"client_remote_addr", req.Connection.RemoteAddr,
+		)
 
 		switch {
 		case errors.Is(err, errMissingField), errors.Is(err, errInvalidFieldValue):
@@ -95,9 +111,13 @@ func (b *exoscaleBackend) authRenew(ctx context.Context,
 	return resp, nil
 }
 
-func (b *exoscaleBackend) auth(ctx context.Context, role *backendRole,
-	req *logical.Request, data *framework.FieldData) (*egoscale.VirtualMachine, error) {
-	var instanceID *egoscale.UUID
+func (b *exoscaleBackend) auth(
+	ctx context.Context,
+	role *backendRole,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*egoscale.Instance, error) {
+	var instanceID string
 
 	config, err := b.config(ctx, req.Storage)
 	if err != nil {
@@ -114,43 +134,42 @@ func (b *exoscaleBackend) auth(ctx context.Context, role *backendRole,
 			param = authLoginParamSecretID
 		}
 
-		uuid, err := egoscale.ParseUUID(data.Get(param).(string))
-		if err != nil {
-			return nil, fmt.Errorf("%w: %s: %s", errInvalidFieldValue, param, err) // nolint:errorlint
-		}
-		instanceID = uuid
+		instanceID = data.Get(param).(string)
 	} else {
 		// Token renewal mode
 
 		if v, ok := req.Auth.InternalData["instance_id"]; ok {
-			instanceID = egoscale.MustParseUUID(v.(string))
+			instanceID = v.(string)
 		} else {
-			return nil, fmt.Errorf("%w: instance_id information missing from token internal data",
-				errInternalError)
+			return nil, fmt.Errorf(
+				"%w: instance_id information missing from token internal data",
+				errInternalError,
+			)
 		}
 	}
 
-	if instanceID == nil {
+	if instanceID == "" {
 		return nil, fmt.Errorf("%w: %s", errMissingField, authLoginParamInstance)
 	}
-	i, err := b.exo.GetWithContext(ctx, &egoscale.VirtualMachine{
-		ID:       instanceID,
-		ZoneName: config.Zone,
-	})
+
+	ctx = exoapi.WithEndpoint(ctx, exoapi.NewReqEndpoint(config.APIEnvironment, config.Zone))
+
+	instance, err := b.exo.GetInstance(ctx, config.Zone, instanceID)
 	if err != nil {
-		if errors.Is(err, egoscale.ErrNotFound) {
-			return nil, fmt.Errorf("%w: instance %s does not exist in zone %s",
+		if errors.Is(err, exoapi.ErrNotFound) {
+			return nil, fmt.Errorf(
+				"%w: instance %s does not exist in zone %s",
 				errAuthFailed,
 				instanceID,
-				config.Zone)
+				config.Zone,
+			)
 		}
-		return nil, fmt.Errorf("%w: unable to retrieve Compute instance information: %s",
+		return nil, fmt.Errorf("%w: unable to retrieve Compute instance information: %v",
 			errInternalError,
 			err) // nolint:errorlint
 	}
-	instance := i.(*egoscale.VirtualMachine)
 
-	if err := role.checkInstance(req, instance); err != nil {
+	if err := b.checkInstanceRole(ctx, req, instance, role); err != nil {
 		return instance, err
 	}
 
@@ -188,14 +207,19 @@ func Factory(ctx context.Context, backendConfig *logical.BackendConfig) (logical
 
 	config, err := backend.config(ctx, backendConfig.StorageView)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to fetch backend config from storage")
+		return nil, fmt.Errorf("unable to retrieve backend config from storage: %w", err)
 	}
+
 	if config != nil {
-		backend.exo = egoscale.NewClient(config.APIEndpoint, config.APIKey, config.APISecret)
+		exo, err := egoscale.NewClient(config.APIKey, config.APISecret)
+		if err != nil {
+			return nil, fmt.Errorf("unable to initialize Exoscale client: %w", err)
+		}
+		backend.exo = exo
 	}
 
 	if err := backend.Setup(ctx, backendConfig); err != nil {
-		return nil, errors.Wrap(err, "failed to create factory")
+		return nil, fmt.Errorf("unable to create factory: %w", err)
 	}
 
 	return &backend, nil
