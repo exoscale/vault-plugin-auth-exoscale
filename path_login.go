@@ -72,8 +72,11 @@ func pathLogin(b *exoscaleBackend) *framework.Path {
 	}
 }
 
-func (b *exoscaleBackend) pathLoginWrite(ctx context.Context,
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *exoscaleBackend) pathLoginWrite(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	if b.exo == nil {
 		return nil, errors.New("backend is not configured")
 	}
@@ -93,28 +96,29 @@ func (b *exoscaleBackend) pathLoginWrite(ctx context.Context,
 	}
 
 	if _, ok := data.GetOk(roleParamName); !ok {
-		return logical.ErrorResponse(fmt.Sprintf("%v: %s", errMissingField, roleParamName)), nil
+		return logical.ErrorResponse("%v: %s", errMissingField, roleParamName), nil
 	}
 	roleName := data.Get(roleParamName).(string)
 
 	role, err := b.roleConfig(ctx, req.Storage, roleName)
 	if err != nil {
-		b.Logger().Error(fmt.Sprintf("unable to retrieve role %q: %s", roleName, err),
-			"client_remote_addr", req.Connection.RemoteAddr)
+		b.Logger().Error(
+			fmt.Sprintf("unable to retrieve role %q: %s", roleName, err),
+			"client_remote_addr", req.Connection.RemoteAddr,
+		)
 		return nil, errInternalError
 	}
 	if role == nil {
-		return logical.ErrorResponse(fmt.Sprintf("role %q not found", roleName)), nil
+		return logical.ErrorResponse("role %q not found", roleName), nil
 	}
 
 	if _, ok := data.GetOk(instanceParamName); !ok {
-		return logical.ErrorResponse(fmt.Sprintf("%v: %s", errMissingField, instanceParamName)), nil
+		return logical.ErrorResponse("%v: %s", errMissingField, instanceParamName), nil
 	}
 
 	instance, err := b.auth(ctx, role, req, data)
 	if err != nil {
-		b.Logger().Error(err.Error(),
-			"client_remote_addr", req.Connection.RemoteAddr)
+		b.Logger().Error(err.Error(), "client_remote_addr", req.Connection.RemoteAddr)
 
 		switch {
 		case errors.Is(err, errMissingField), errors.Is(err, errInvalidFieldValue):
@@ -128,16 +132,17 @@ func (b *exoscaleBackend) pathLoginWrite(ctx context.Context,
 		}
 	}
 
-	b.Logger().Debug("successfully authenticated instance",
-		"instance_id", instance.ID.String(),
+	b.Logger().Debug(
+		"successfully authenticated instance",
+		"instance_id", *instance.ID,
 		"instance_name", instance.Name,
-		"zone", instance.ZoneName,
+		"zone", instance.Zone,
 	)
 
 	auth := &logical.Auth{
 		InternalData: map[string]interface{}{
-			"instance_id": instance.ID.String(),
-			"zone":        instance.ZoneName,
+			"instance_id": *instance.ID,
+			"zone":        *instance.Zone,
 			"role":        roleName,
 		},
 	}

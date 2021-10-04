@@ -8,26 +8,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/exoscale/egoscale"
+	egoscale "github.com/exoscale/egoscale/v2"
+	exoapi "github.com/exoscale/egoscale/v2/api"
 	"github.com/hashicorp/vault/sdk/logical"
-	"github.com/jarcoal/httpmock"
+	"github.com/stretchr/testify/mock"
 )
 
 var (
-	testZoneName                       = "ch-gva-2"
-	testZoneID                         = "1128bd56-b4d9-4ac6-a7b9-c715b187ce11"
-	testInstanceName                   = "test-instance"
-	testInstanceID                     = "288e37eb-1d66-4634-88aa-8dc87a9e484d"
-	testInstanceCreated                = time.Now().Add(-time.Minute).Format("2006-01-02T15:04:05-0700")
-	testInstancePoolID                 = "74bb6f3d-f43a-4038-a1b9-5a6779aa37f3"
-	testInstanceSecurityGroupName      = "test-sg"
-	testInstanceSecurityGroupID        = "2ded49f6-1221-4d70-bc23-aafad5404fe9"
-	testInstanceDefaultSecurityGroupID = "80fe7557-9100-4875-964c-a7c3db93a1e2"
-	testInstanceIPAddress              = net.ParseIP("1.2.3.4")
-	testInstanceTags                   = map[string]string{
-		"k1": "v1",
-		"k2": "v2",
-	}
+	testInstanceCreated           = time.Now().Add(-time.Minute)
+	testInstanceID                = new(backendTestSuite).randomID()
+	testInstanceIPAddress         = net.ParseIP("1.2.3.4")
+	testInstanceLabels            = map[string]string{"k1": "v1", "k2": "v2"}
+	testInstanceName              = new(backendTestSuite).randomString(10)
+	testInstancePoolID            = new(backendTestSuite).randomID()
+	testInstancePoolName          = new(backendTestSuite).randomString(10)
+	testInstanceSecurityGroupID   = new(backendTestSuite).randomID()
+	testInstanceSecurityGroupName = new(backendTestSuite).randomString(10)
+	testInstanceState             = "running"
+	testInstanceTemplateID        = new(backendTestSuite).randomID()
+	testInstanceTypeID            = new(backendTestSuite).randomID()
+	testZone                      = "ch-gva-2"
 )
 
 func (ts *backendTestSuite) TestPathLogin() {
@@ -41,6 +41,9 @@ func (ts *backendTestSuite) TestPathLogin() {
 		{
 			name:    "fail_missing_field",
 			reqData: map[string]interface{}{},
+			setupFunc: func(ts *backendTestSuite) {
+				ts.storeEntry(configStoragePath, &backendConfig{Zone: testZone})
+			},
 			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, _ error) {
 				ts.Require().True(strings.Contains(res.Error().Error(), errMissingField.Error()))
 			},
@@ -48,11 +51,11 @@ func (ts *backendTestSuite) TestPathLogin() {
 		{
 			name: "fail_permission_denied",
 			setupFunc: func(ts *backendTestSuite) {
-				ts.storeEntry(configStoragePath, backendConfig{
-					Zone: testZoneName,
-				})
+				ts.storeEntry(configStoragePath, backendConfig{Zone: testZone})
 
-				ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{})
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetInstance", mock.Anything, testZone, testInstanceID).
+					Return(new(egoscale.Instance), exoapi.ErrNotFound)
 			},
 			resCheckFunc: func(ts *backendTestSuite, response *logical.Response, err error) {
 				ts.Require().EqualError(err, logical.ErrPermissionDenied.Error())
@@ -66,62 +69,53 @@ func (ts *backendTestSuite) TestPathLogin() {
 		{
 			name: "ok",
 			setupFunc: func(ts *backendTestSuite) {
-				ts.storeEntry(roleStoragePathPrefix+testRoleName, backendRole{
-					Validator: fmt.Sprintf(
-						`client_ip == instance_public_ip && `+
-							`instance_manager_id == "%s" && `+
-							`instance_created > now - duration("10m") && `+
-							`"%s" in instance_security_group_ids && `+
-							`"default" in instance_security_group_names && `+
-							`instance_tags == {%s} && `+
-							`instance_zone_id == "%s" && `+
-							`instance_zone_name == "%s"`,
-						testInstancePoolID,
-						testInstanceSecurityGroupID,
-						func() string {
-							tags := make([]string, 0)
-							for k, v := range testInstanceTags {
-								tags = append(tags, fmt.Sprintf("%q:%q", k, v))
-							}
-							return strings.Join(tags, ",")
-						}(),
-						testZoneID,
-						testZoneName,
-					),
-				})
+				ts.storeEntry(configStoragePath, &backendConfig{Zone: testZone})
 
-				ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{{
-					Name:      testInstanceName,
-					Created:   testInstanceCreated,
-					ID:        egoscale.MustParseUUID(testInstanceID),
-					ZoneName:  testZoneName,
-					ZoneID:    egoscale.MustParseUUID(testZoneID),
-					ManagerID: egoscale.MustParseUUID(testInstancePoolID),
-					Nic:       []egoscale.Nic{{IPAddress: testInstanceIPAddress, IsDefault: true}},
-					SecurityGroup: []egoscale.SecurityGroup{
-						{
-							ID:   egoscale.MustParseUUID(testInstanceDefaultSecurityGroupID),
-							Name: "default",
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetInstance", mock.Anything, testZone, testInstanceID).
+					Return(&egoscale.Instance{
+						CreatedAt:      &testInstanceCreated,
+						ID:             &testInstanceID,
+						InstanceTypeID: &testInstanceTypeID,
+						Labels:         &testInstanceLabels,
+						Manager: &egoscale.InstanceManager{
+							ID:   testInstancePoolID,
+							Type: "instance-pool",
 						},
-						{
-							ID:   egoscale.MustParseUUID(testInstanceSecurityGroupID),
-							Name: testInstanceSecurityGroupName,
-						},
-					},
-					Tags: func() []egoscale.ResourceTag {
-						tags := make([]egoscale.ResourceTag, 0)
-						for k, v := range testInstanceTags {
-							tags = append(tags, egoscale.ResourceTag{Key: k, Value: v})
-						}
-						return tags
-					}(),
-				}})
+						Name:             &testInstanceName,
+						PublicIPAddress:  &testInstanceIPAddress,
+						SecurityGroupIDs: &[]string{testInstanceSecurityGroupID},
+						State:            &testInstanceState,
+						TemplateID:       &testInstanceTemplateID,
+						Zone:             &testZone,
+					}, nil)
+
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetInstancePool", mock.Anything, testZone, testInstancePoolID).
+					Return(&egoscale.InstancePool{
+						ElasticIPIDs:   nil,
+						ID:             &testInstancePoolID,
+						InstanceIDs:    &[]string{testInstanceID},
+						InstanceTypeID: &testInstanceTypeID,
+						Name:           &testInstancePoolName,
+						State:          &testInstanceState,
+						TemplateID:     &testInstanceTemplateID,
+						Zone:           &testZone,
+					}, nil)
+
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetSecurityGroup", mock.Anything, testZone, testInstanceSecurityGroupID).
+					Return(&egoscale.SecurityGroup{
+						ID:   &testInstanceSecurityGroupID,
+						Name: &testInstanceSecurityGroupName,
+					}, nil)
 			},
-			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, _ error) {
+			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, err error) {
+				ts.Require().NoError(err)
 				ts.Require().Equal(map[string]interface{}{
 					"instance_id": testInstanceID,
 					"role":        testRoleName,
-					"zone":        testZoneName,
+					"zone":        testZone,
 				}, res.Auth.InternalData)
 			},
 			reqData: map[string]interface{}{
@@ -134,64 +128,53 @@ func (ts *backendTestSuite) TestPathLogin() {
 			setupFunc: func(ts *backendTestSuite) {
 				ts.storeEntry(configStoragePath, backendConfig{
 					AppRoleMode: true,
+					Zone:        testZone,
 				})
 
-				ts.storeEntry(roleStoragePathPrefix+testRoleName, backendRole{
-					Validator: fmt.Sprintf(
-						`client_ip == instance_public_ip && `+
-							`instance_manager_id == "%s" && `+
-							`instance_created > now - duration("10m") && `+
-							`"%s" in instance_security_group_ids && `+
-							`"default" in instance_security_group_names && `+
-							`instance_tags == {%s} && `+
-							`instance_zone_id == "%s" && `+
-							`instance_zone_name == "%s"`,
-						testInstancePoolID,
-						testInstanceSecurityGroupID,
-						func() string {
-							tags := make([]string, 0)
-							for k, v := range testInstanceTags {
-								tags = append(tags, fmt.Sprintf("%q:%q", k, v))
-							}
-							return strings.Join(tags, ",")
-						}(),
-						testZoneID,
-						testZoneName,
-					),
-				})
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetInstance", mock.Anything, testZone, testInstanceID).
+					Return(&egoscale.Instance{
+						CreatedAt:      &testInstanceCreated,
+						ID:             &testInstanceID,
+						InstanceTypeID: &testInstanceTypeID,
+						Labels:         &testInstanceLabels,
+						Manager: &egoscale.InstanceManager{
+							ID:   testInstancePoolID,
+							Type: "instance-pool",
+						},
+						Name:             &testInstanceName,
+						PublicIPAddress:  &testInstanceIPAddress,
+						SecurityGroupIDs: &[]string{testInstanceSecurityGroupID},
+						State:            &testInstanceState,
+						TemplateID:       &testInstanceTemplateID,
+						Zone:             &testZone,
+					}, nil)
 
-				ts.mockListVirtualMachinesAPI([]egoscale.VirtualMachine{{
-					Name:      testInstanceName,
-					Created:   testInstanceCreated,
-					ID:        egoscale.MustParseUUID(testInstanceID),
-					ZoneName:  testZoneName,
-					ZoneID:    egoscale.MustParseUUID(testZoneID),
-					ManagerID: egoscale.MustParseUUID(testInstancePoolID),
-					Nic:       []egoscale.Nic{{IPAddress: testInstanceIPAddress, IsDefault: true}},
-					SecurityGroup: []egoscale.SecurityGroup{
-						{
-							ID:   egoscale.MustParseUUID(testInstanceDefaultSecurityGroupID),
-							Name: "default",
-						},
-						{
-							ID:   egoscale.MustParseUUID(testInstanceSecurityGroupID),
-							Name: testInstanceSecurityGroupName,
-						},
-					},
-					Tags: func() []egoscale.ResourceTag {
-						tags := make([]egoscale.ResourceTag, 0)
-						for k, v := range testInstanceTags {
-							tags = append(tags, egoscale.ResourceTag{Key: k, Value: v})
-						}
-						return tags
-					}(),
-				}})
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetInstancePool", mock.Anything, testZone, testInstancePoolID).
+					Return(&egoscale.InstancePool{
+						ElasticIPIDs:   nil,
+						ID:             &testInstancePoolID,
+						InstanceIDs:    &[]string{testInstanceID},
+						InstanceTypeID: &testInstanceTypeID,
+						Name:           &testInstancePoolName,
+						State:          &testInstanceState,
+						TemplateID:     &testInstanceTemplateID,
+						Zone:           &testZone,
+					}, nil)
+
+				ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).
+					On("GetSecurityGroup", mock.Anything, testZone, testInstanceSecurityGroupID).
+					Return(&egoscale.SecurityGroup{
+						ID:   &testInstanceSecurityGroupID,
+						Name: &testInstanceSecurityGroupName,
+					}, nil)
 			},
 			resCheckFunc: func(ts *backendTestSuite, res *logical.Response, _ error) {
 				ts.Require().Equal(map[string]interface{}{
 					"instance_id": testInstanceID,
 					"role":        testRoleName,
-					"zone":        testZoneName,
+					"zone":        testZone,
 				}, res.Auth.InternalData)
 			},
 			reqData: map[string]interface{}{
@@ -204,29 +187,33 @@ func (ts *backendTestSuite) TestPathLogin() {
 	ts.storeEntry(roleStoragePathPrefix+testRoleName, backendRole{
 		Validator: fmt.Sprintf(
 			`client_ip == instance_public_ip && `+
-				`instance_manager_id == "%s" && `+
 				`instance_created > now - duration("10m") && `+
+				`instance_id == "%s" && `+
+				`instance_manager_id == "%s" && `+
+				`instance_manager_name == "%s" && `+
 				`"%s" in instance_security_group_ids && `+
-				`"default" in instance_security_group_names && `+
-				`instance_tags == {%s} && `+
-				`instance_zone_id == "%s" && `+
-				`instance_zone_name == "%s"`,
+				`"%s" in instance_security_group_names && `+
+				`instance_labels == {%s} && `+
+				`instance_zone == "%s"`,
+			testInstanceID,
 			testInstancePoolID,
+			testInstancePoolName,
 			testInstanceSecurityGroupID,
+			testInstanceSecurityGroupName,
 			func() string {
 				tags := make([]string, 0)
-				for k, v := range testInstanceTags {
+				for k, v := range testInstanceLabels {
 					tags = append(tags, fmt.Sprintf("%q:%q", k, v))
 				}
 				return strings.Join(tags, ",")
 			}(),
-			testZoneID,
-			testZoneName,
+			testZone,
 		),
 	})
 
 	for _, tt := range tests {
-		httpmock.Reset()
+		// Reset the Exoscale client mock calls stack between test cases
+		ts.backend.(*exoscaleBackend).exo.(*exoscaleClientMock).ExpectedCalls = nil
 
 		ts.T().Run(tt.name, func(t *testing.T) {
 			if setup := tt.setupFunc; setup != nil {

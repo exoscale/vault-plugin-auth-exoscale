@@ -5,15 +5,15 @@ github.com/antlr/antlr4/runtime/Go/antlr
 github.com/armon/go-radix
 # github.com/davecgh/go-spew v1.1.1
 github.com/davecgh/go-spew/spew
-# github.com/deepmap/oapi-codegen v1.4.1
-## explicit
+# github.com/deepmap/oapi-codegen v1.6.1
 github.com/deepmap/oapi-codegen/pkg/runtime
 github.com/deepmap/oapi-codegen/pkg/types
-# github.com/exoscale/egoscale v0.36.2
+# github.com/exoscale/egoscale v0.77.0
 ## explicit
-github.com/exoscale/egoscale
-github.com/exoscale/egoscale/api/v2
-github.com/exoscale/egoscale/internal/v2
+github.com/exoscale/egoscale/v2
+github.com/exoscale/egoscale/v2/api
+github.com/exoscale/egoscale/v2/oapi
+github.com/exoscale/egoscale/version
 # github.com/fatih/color v1.10.0
 ## explicit
 github.com/fatih/color
@@ -23,7 +23,6 @@ github.com/fatih/color
 ## explicit
 github.com/gofrs/uuid
 # github.com/golang/protobuf v1.4.3
-## explicit
 github.com/golang/protobuf/proto
 github.com/golang/protobuf/protoc-gen-go/descriptor
 github.com/golang/protobuf/ptypes
@@ -132,7 +131,6 @@ github.com/hashicorp/vault/sdk/version
 ## explicit
 github.com/hashicorp/yamux
 # github.com/jarcoal/httpmock v1.0.6
-## explicit
 github.com/jarcoal/httpmock
 # github.com/mattn/go-colorable v0.1.8
 github.com/mattn/go-colorable
@@ -154,7 +152,6 @@ github.com/oklog/run
 github.com/pierrec/lz4
 github.com/pierrec/lz4/internal/xxh32
 # github.com/pkg/errors v0.9.1
-## explicit
 github.com/pkg/errors
 # github.com/pmezard/go-difflib v1.0.0
 github.com/pmezard/go-difflib/difflib
@@ -163,24 +160,21 @@ github.com/ryanuber/go-glob
 # github.com/stoewer/go-strcase v1.2.0
 github.com/stoewer/go-strcase
 # github.com/stretchr/objx v0.3.0
-## explicit
 github.com/stretchr/objx
-# github.com/stretchr/testify v1.6.1
+# github.com/stretchr/testify v1.7.0
 ## explicit
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/mock
 github.com/stretchr/testify/require
 github.com/stretchr/testify/suite
 # golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
-## explicit
 golang.org/x/crypto/blake2b
 golang.org/x/crypto/cryptobyte
 golang.org/x/crypto/cryptobyte/asn1
 golang.org/x/crypto/ed25519
 golang.org/x/crypto/ed25519/internal/edwards25519
 golang.org/x/crypto/pbkdf2
-# golang.org/x/net v0.0.0-20201224014010-6772e930b67b
-## explicit
+# golang.org/x/net v0.0.0-20210119194325-5f4716e94777
 golang.org/x/net/context
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
@@ -188,19 +182,17 @@ golang.org/x/net/http2/hpack
 golang.org/x/net/idna
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
-# golang.org/x/sys v0.0.0-20210113181707-4bcb84eeeb78
-## explicit
+# golang.org/x/sys v0.0.0-20210124154548-22da62e12c0c
 golang.org/x/sys/cpu
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 # golang.org/x/text v0.3.5
-## explicit
 golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
 golang.org/x/text/width
-# golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
+# golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
 golang.org/x/time/rate
 # google.golang.org/genproto v0.0.0-20210113195801-ae06605f4595
 ## explicit
@@ -299,6 +291,5 @@ gopkg.in/square/go-jose.v2
 gopkg.in/square/go-jose.v2/cipher
 gopkg.in/square/go-jose.v2/json
 gopkg.in/square/go-jose.v2/jwt
-# gopkg.in/yaml.v3 v3.0.0-20200615113413-eeeca48fe776
-## explicit
+# gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
 gopkg.in/yaml.v3
