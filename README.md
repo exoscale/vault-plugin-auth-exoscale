@@ -70,6 +70,17 @@ $ vault write auth/exoscale/config  \
     zone=ch-gva-2
 ```
 
+Note the provided IAM key should ideally bear only the operations required by the plugin and none others:
+
+```sh
+exo iam access-key create 'Vault Exoscale Authentication plugin' \
+  --operation list-zones \
+  --operation list-instances \
+  --operation list-security-groups \
+  --operation get-instance \
+  --operation get-instance-pool \
+  --operation get-security-group
+```
 
 ### Backend Roles
 
@@ -86,8 +97,27 @@ $ vault write auth/exoscale/role/ci-worker \
 
 In the above, we enforce that a Compute instance presenting itself has been created within the last 10 minutes and is coming from the same IP address than the one it was assigned on its public interface. To know which variables are available to the context in which the expression will be evaluated, run the `vault path-help auth/exoscale/role/_` command.
 
+**WARNING:** When specifying your own validator, make sure to include the (built-in default) `client_ip == instance_public_ip` stanza, UNLESS you add some other expression that properly authorizes an instance (ID) - e.g. `client_ip == "192.0.2.42"` - bearing in mind the `instance` (ID) passed for authentication may be spoofed by the client!
+
 Besides additional checks configuration, roles can also be used to set the properties of the Vault [tokens][vault-doc-tokens] to be issued upon successful authentication: run the `vault path-help auth/exoscale/role/_` command for more information.
 
+#### Validator/CEL variables
+
+The following variables are available to build the validation expression:
+
+* `client_ip` (string): Client IP address (as seen by the Vault Server); e.g. `client_ip == instance_public_ip`
+* `instance_created` (timestamp): Timestamp at which the instance was created (set by Exoscale); e.g. `instance_created > now - duration("10m")`
+* `instance_id` (string): Instance ID (UUID; passed by the Client)
+* `instance_manager` (string): Instance manager (type; among `instance_pool`, `sks`, `nlb` or empty)
+* `instance_manager_id` (string): Instance manager ID (UUID; set by Exoscale)
+* `instance_manager_name` (string): Instance manager name (set by Exoscale); e.g. `instance_manager_name == "MyInstancePool"`
+* `instance_name` (string): Instance name (set by the user)
+* `instance_public_ip` (string): Instance public IP address (set by the Exoscale)
+* `instance_security_group_ids` (list[string]): Instance associated Security Group IDs (UUIDs; set by the user)
+* `instance_security_group_names` (list[string]): Instance associated Security Group names (set by the user); e.g. `"MySecurityGroup" in instance_security_group_names`
+* `instance_labels` (map[string, string]): Instance labels (set by the user); e.g. `has(instance_labels["MyClass"]) && instance_labels["MyClass"] == "MyAuthorizedClass"`
+* `instance_zone` (string): Instance zone (set by the Exoscale; among `ch-gva-2`, `at-vie-1`, etc.);
+* `now` (timestamp): Current timestamp
 
 ### Log into Vault using the Exoscale auth method
 
