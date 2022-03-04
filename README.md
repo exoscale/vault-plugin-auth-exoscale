@@ -97,7 +97,7 @@ $ vault write auth/exoscale/role/ci-worker \
 
 In the above, we enforce that a Compute instance presenting itself has been created within the last 10 minutes and is coming from the same IP address than the one it was assigned on its public interface. To know which variables are available to the context in which the expression will be evaluated, run the `vault path-help auth/exoscale/role/_` command.
 
-**WARNING:** When specifying your own validator, make sure to include the (built-in default) `client_ip == instance_public_ip` stanza, UNLESS you add some other expression that properly authorizes an instance (ID) - e.g. `has(instance_labels["MyClass"]) && instance_labels["MyClass"] == "MyAuthorizedClass"` - bearing in mind the `instance` (ID) passed for authentication may be spoofed by the client!
+**WARNING:** When specifying your own validator, make sure to include the (built-in default) `client_ip == instance_public_ip` stanza, UNLESS you add some other expression that properly authorizes an instance (ID) - e.g. `client_ip == "192.0.2.42"` - bearing in mind the `instance` (ID) passed for authentication may be spoofed by the client!
 
 Besides additional checks configuration, roles can also be used to set the properties of the Vault [tokens][vault-doc-tokens] to be issued upon successful authentication: run the `vault path-help auth/exoscale/role/_` command for more information.
 
