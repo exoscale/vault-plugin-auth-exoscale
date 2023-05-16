@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	egoscale "github.com/exoscale/egoscale/v2"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
+
+	egoscale "github.com/exoscale/egoscale/v2"
 )
 
 const (

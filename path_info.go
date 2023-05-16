@@ -3,9 +3,10 @@ package exoscale
 import (
 	"context"
 
-	"github.com/exoscale/vault-plugin-auth-exoscale/version"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
+
+	"github.com/exoscale/vault-plugin-auth-exoscale/version"
 )
 
 var (
