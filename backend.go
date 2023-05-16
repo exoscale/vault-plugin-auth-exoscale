@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 
-	egoscale "github.com/exoscale/egoscale/v2"
-	exoapi "github.com/exoscale/egoscale/v2/api"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	vaultsdkver "github.com/hashicorp/vault/sdk/version"
+
+	egoscale "github.com/exoscale/egoscale/v2"
+	exoapi "github.com/exoscale/egoscale/v2/api"
 
 	"github.com/exoscale/vault-plugin-auth-exoscale/version"
 )

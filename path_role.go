@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
-	egoscale "github.com/exoscale/egoscale/v2"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/tokenutil"
 	"github.com/hashicorp/vault/sdk/logical"
+
+	egoscale "github.com/exoscale/egoscale/v2"
 )
 
 const (
