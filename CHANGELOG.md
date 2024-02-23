@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- 
 - automate release with Exoscale Tooling GPG key #11
 
 ## 0.2.0
