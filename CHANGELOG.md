@@ -6,6 +6,7 @@
 
 - go.mk: remove submodule and initialize through make #12 
 - automate release with Exoscale Tooling GPG key #11
+- go.mk: lint with staticcheck #13 
 
 ## 0.2.0
 
